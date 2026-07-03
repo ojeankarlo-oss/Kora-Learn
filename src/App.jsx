@@ -3,6 +3,7 @@
 // Salvar em: src/App.jsx  (projeto Vite React)
 // Depende de: src/lib/supabaseClient.js e src/lib/api.js
 // ============================================================
+import PreMatricula from "./PreMatricula";
 import React, { useState, useEffect, useCallback } from "react";
 import {
   Home, PlayCircle, BookOpen, Bell, ChevronRight, CheckCircle2, Lock,
@@ -497,6 +498,14 @@ function GestorApp({ perfil, onLogout, toast }) {
    RAIZ â sessao e roteamento por perfil
    ============================================================ */
 export default function App() {
+  // --- Roteamento por hash (sem biblioteca) ---
+  const [rota, setRota] = React.useState(window.location.hash);
+  React.useEffect(() => {
+    const handler = () => setRota(window.location.hash);
+    window.addEventListener('hashchange', handler);
+    return () => window.removeEventListener('hashchange', handler);
+  }, []);
+  if (rota === '#/inscricao') return <PreMatricula />;
   const [checking, setChecking] = useState(true);
   const [logged, setLogged] = useState(false);
   const [perfil, setPerfil] = useState(null);
