@@ -30,7 +30,7 @@ jobs:
           VITE_SUPABASE_URL: https://goxaeupwxhbiobvvwnxj.supabase.co
           VITE_SUPABASE_ANON_KEY: sb_publishable_j5ibrtWDjEvXWKzuYZMO3g_F-sflqZn
           VITE_TENANT_ID: 819085f6-19da-41b5-a22c-345198c96699
-          run: npm run build
+        run: npm run build
 
       - uses: actions/configure-pages@v4
 
