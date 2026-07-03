@@ -1,5 +1,5 @@
 // ============================================================
-// KORA LEARN â Camada de dados v2 (casa com a migration 001)
+// KORA LEARN — Camada de dados v2 (casa com a migration 001)
 // Salvar em: src/lib/api.js
 // ============================================================
 import { supabase } from "./supabaseClient";
@@ -124,6 +124,42 @@ export async function listarLeads() {
   return data ?? [];
 }
 
+export async function listarMatriculas() {
+  const { data, error } = await supabase
+    .from("matriculas")
+    .select("id, situacao, data_matricula, created_at, aluno:usuarios(id, nome, email, telefone), curso:cursos(id, nome)")
+    .order("created_at", { ascending: false })
+    .limit(200);
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function atualizarSituacaoMatricula(matriculaId, situacao) {
+  const { error } = await supabase
+    .from("matriculas")
+    .update({ situacao })
+    .eq("id", matriculaId);
+  if (error) throw error;
+}
+
+export async function listarCursosPublico() {
+  const { data, error } = await supabase
+    .from("cursos")
+    .select("id, nome")
+    .eq("ativo", true)
+    .order("nome");
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function primeiroAcesso(email, senha) {
+  const { data, error } = await supabase.auth.signUp({ email, password: senha });
+  if (error) throw error;
+  const { data: vinculado, error: e2 } = await supabase.rpc("vincular_minha_conta");
+  if (e2) throw e2;
+  return { user: data.user, vinculado, needsConfirmation: !!data.user && !data.session };
+}
+
 // Converter lead em aluno matriculado
 export async function converterLead(lead, tenantId, cursoId, turmaId = null) {
   const { data: novoAluno, error: e1 } = await supabase
@@ -142,7 +178,7 @@ export async function converterLead(lead, tenantId, cursoId, turmaId = null) {
   const { error: e2 } = await supabase.from("matriculas").insert({
     tenant_id: tenantId,
     usuario_id: novoAluno.id,
-    curso_id: cursoId,
+    curso_id: lead?.curso_id ?? cursoId,
     turma_id: turmaId,
     origem: "self_service",
   });

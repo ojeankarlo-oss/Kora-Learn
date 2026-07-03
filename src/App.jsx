@@ -1,9 +1,8 @@
 // ============================================================
-// KORA LEARN â App conectado ao Supabase
+// KORA LEARN — App conectado ao Supabase
 // Salvar em: src/App.jsx  (projeto Vite React)
 // Depende de: src/lib/supabaseClient.js e src/lib/api.js
 // ============================================================
-import PreMatricula from "./PreMatricula";
 import React, { useState, useEffect, useCallback } from "react";
 import {
   Home, PlayCircle, BookOpen, Bell, ChevronRight, CheckCircle2, Lock,
@@ -11,9 +10,12 @@ import {
   FileText, Clock, TrendingUp, Loader2, Inbox, UserPlus, RefreshCw
 } from "lucide-react";
 import { supabase } from "./lib/supabaseClient";
+import PreMatricula from "./PreMatricula";
+import PrimeiroAcesso from "./PrimeiroAcesso";
 import {
   entrarComEmail, sair, meuPerfil, meusCursos, concluirAula,
-  kpisDoTenant, listarLeads, listarCursos, converterLead
+  kpisDoTenant, listarLeads, listarCursos, converterLead,
+  listarMatriculas, atualizarSituacaoMatricula
 } from "./lib/api";
 
 /* ---------- Identidade visual ---------- */
@@ -101,7 +103,7 @@ function Toast({ msg }) {
   );
 }
 
-function Spinner({ label = "Carregandoâ¦" }) {
+function Spinner({ label = "Carregando…" }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, padding: 48, color: T.muted }}>
       <Loader2 size={28} className="kl-spin" color={T.forest} />
@@ -118,6 +120,10 @@ function LoginScreen({ onLogged }) {
   const [senha, setSenha] = useState("");
   const [erro, setErro] = useState("");
   const [loading, setLoading] = useState(false);
+
+  const irParaPrimeiroAcesso = () => {
+    window.location.hash = "#/primeiro-acesso";
+  };
 
   const entrar = async () => {
     setErro(""); setLoading(true);
@@ -157,7 +163,7 @@ function LoginScreen({ onLogged }) {
           style={{ width: "100%", boxSizing: "border-box", marginTop: 4, padding: "10px 12px", borderRadius: 12, border: `1.5px solid ${T.line}`, fontSize: 14, color: T.ink, outline: "none" }} />
 
         <label style={{ display: "block", marginTop: 12, fontSize: 12, fontWeight: 600, color: T.muted }}>Senha</label>
-        <input type="password" value={senha} onChange={(e) => setSenha(e.target.value)} placeholder="â¢â¢â¢â¢â¢â¢â¢â¢"
+        <input type="password" value={senha} onChange={(e) => setSenha(e.target.value)} placeholder="••••••••"
           onKeyDown={(e) => e.key === "Enter" && entrar()}
           style={{ width: "100%", boxSizing: "border-box", marginTop: 4, padding: "10px 12px", borderRadius: 12, border: `1.5px solid ${T.line}`, fontSize: 14, color: T.ink, outline: "none" }} />
 
@@ -169,7 +175,11 @@ function LoginScreen({ onLogged }) {
 
         <button onClick={entrar} disabled={loading || !email || !senha}
           style={{ width: "100%", marginTop: 18, padding: 13, borderRadius: 12, border: "none", background: loading ? "#9DB5AC" : T.forest, color: "#fff", fontWeight: 600, fontSize: 14 }}>
-          {loading ? "Entrandoâ¦" : "Entrar"}
+          {loading ? "Entrando…" : "Entrar"}
+        </button>
+
+        <button onClick={irParaPrimeiroAcesso} style={{ width: "100%", marginTop: 10, background: "transparent", border: "none", color: T.forest, fontSize: 13, fontWeight: 600 }}>
+          Primeiro acesso? Crie sua senha
         </button>
       </div>
       <div style={{ marginTop: 20, fontSize: 12, color: "#9DBBAF" }}>
@@ -222,7 +232,7 @@ function AlunoApp({ perfil, onLogout, toast }) {
       setCursos((prev) => prev.map((c) =>
         c.id !== cursoId ? c : { ...c, aulas: c.aulas.map((a) => a.id === aulaId ? { ...a, done: true } : a) }
       ));
-      toast("+1 Aula concluÃ­da â progresso salvo");
+      toast("+1 Aula concluída ✓ progresso salvo");
     } catch (e) {
       console.error(e);
       toast("Erro ao salvar progresso");
@@ -245,7 +255,7 @@ function AlunoApp({ perfil, onLogout, toast }) {
       </div>
 
       <div style={{ padding: "16px 16px 110px", maxWidth: 560, margin: "0 auto" }}>
-        {cursos === null && <Spinner label="Carregando seus cursosâ¦" />}
+        {cursos === null && <Spinner label="Carregando seus cursos…" />}
 
         {cursos !== null && erro && (
           <Card style={{ padding: 16, textAlign: "center" }}>
@@ -273,7 +283,7 @@ function AlunoApp({ perfil, onLogout, toast }) {
           <div className="kl-fade">
             <Eyebrow>Seu progresso</Eyebrow>
             <h1 className="kl-display" style={{ fontSize: 24, fontWeight: 800, color: T.ink, margin: "4px 0 0" }}>
-              OlÃ¡, {perfil.nome.split(" ")[0]}! í ½í±
+              Olá, {perfil.nome.split(" ")[0]}! 👋
             </h1>
 
             <Card style={{ marginTop: 16, padding: 16, background: T.forestDark, border: "none" }}>
@@ -290,7 +300,7 @@ function AlunoApp({ perfil, onLogout, toast }) {
                 </button>
               </div>
               <div style={{ fontSize: 11, color: "#8FB3A5", marginTop: 8 }}>
-                {curso.aulas.filter(a => a.done).length} de {curso.aulas.length} aulas concluÃ­das
+                {curso.aulas.filter(a => a.done).length} de {curso.aulas.length} aulas concluídas
               </div>
             </Card>
 
@@ -386,9 +396,14 @@ function AlunoApp({ perfil, onLogout, toast }) {
    GESTOR
    ============================================================ */
 function GestorApp({ perfil, onLogout, toast }) {
+  const [activeTab, setActiveTab] = useState("overview");
   const [kpis, setKpis] = useState(null);
   const [leads, setLeads] = useState(null);
   const [cursos, setCursos] = useState([]);
+  const [matriculas, setMatriculas] = useState([]);
+  const [matriculasLoading, setMatriculasLoading] = useState(false);
+  const [matriculasError, setMatriculasError] = useState("");
+  const [buscaAluno, setBuscaAluno] = useState("");
 
   const carregar = useCallback(async () => {
     try {
@@ -404,15 +419,77 @@ function GestorApp({ perfil, onLogout, toast }) {
 
   useEffect(() => { carregar(); }, [carregar]);
 
+  const carregarMatriculas = useCallback(async () => {
+    setMatriculasLoading(true);
+    setMatriculasError("");
+    try {
+      const data = await listarMatriculas();
+      setMatriculas(data);
+    } catch (e) {
+      console.error(e);
+      setMatriculasError("Não foi possível carregar os alunos matriculados.");
+      setMatriculas([]);
+    } finally {
+      setMatriculasLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { carregarMatriculas(); }, [carregarMatriculas]);
+
   const converter = async (lead) => {
     if (!cursos.length) { toast("Cadastre um curso antes de converter"); return; }
     try {
       await converterLead(lead, perfil.tenant_id, cursos[0].id);
-      toast(`${lead.nome.split(" ")[0]} matriculado(a) em ${cursos[0].nome} â`);
+      toast(`${lead.nome.split(" ")[0]} matriculado(a) em ${cursos[0].nome} ✓`);
       carregar();
     } catch (e) {
       console.error(e);
       toast("Erro ao converter lead");
+    }
+  };
+
+  const handleSituacaoMatricula = async (matricula, novaSituacao) => {
+    const confirmar = window.confirm(
+      novaSituacao === "cancelada"
+        ? `Cancelar a matrícula de ${matricula.aluno?.nome ?? "este aluno"}?`
+        : `Reativar a matrícula de ${matricula.aluno?.nome ?? "este aluno"}?`
+    );
+    if (!confirmar) return;
+    try {
+      await atualizarSituacaoMatricula(matricula.id, novaSituacao);
+      toast("Situação atualizada");
+      carregarMatriculas();
+    } catch (e) {
+      console.error(e);
+      toast("Erro ao atualizar a matrícula");
+    }
+  };
+
+  const matriculasFiltradas = matriculas.filter((m) => {
+    const termo = buscaAluno.trim().toLowerCase();
+    if (!termo) return true;
+    const nome = (m.aluno?.nome ?? "").toLowerCase();
+    const email = (m.aluno?.email ?? "").toLowerCase();
+    return nome.includes(termo) || email.includes(termo);
+  });
+
+  const totaisPorSituacao = matriculas.reduce((acc, m) => {
+    acc[m.situacao] = (acc[m.situacao] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  const badgeStyle = (situacao) => {
+    switch (situacao) {
+      case "ativa":
+        return { background: "#EAF6F0", color: T.success };
+      case "concluida":
+        return { background: "#EAF2FB", color: "#2F5E9E" };
+      case "cancelada":
+        return { background: "#FCECEA", color: T.danger };
+      case "trancada":
+        return { background: "#FFF5E3", color: T.amber };
+      default:
+        return { background: T.paper, color: T.muted };
     }
   };
 
@@ -433,7 +510,7 @@ function GestorApp({ perfil, onLogout, toast }) {
       <div style={{ padding: "16px 16px 40px", maxWidth: 720, margin: "0 auto" }}>
         <Eyebrow>Visão geral · {new Date().toLocaleDateString("pt-BR", { month: "long", year: "numeric" })}</Eyebrow>
 
-        {!kpis ? <Spinner label="Carregando indicadoresâ¦" /> : (
+        {!kpis ? <Spinner label="Carregando indicadores…" /> : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 8 }}>
             {[
               { label: "Alunos ativos", val: kpis.alunosAtivos, icon: Users },
@@ -458,7 +535,7 @@ function GestorApp({ perfil, onLogout, toast }) {
           </button>
         </div>
 
-        {!leads ? <Spinner label="Carregando leadsâ¦" /> : leads.length === 0 ? (
+        {!leads ? <Spinner label="Carregando leads…" /> : leads.length === 0 ? (
           <Card style={{ marginTop: 8, padding: 24, textAlign: "center" }}>
             <Inbox size={26} color={T.muted} />
             <div style={{ fontSize: 13, color: T.muted, marginTop: 6 }}>
@@ -495,7 +572,7 @@ function GestorApp({ perfil, onLogout, toast }) {
 }
 
 /* ============================================================
-   RAIZ â sessao e roteamento por perfil
+   RAIZ — sessão e roteamento por perfil
    ============================================================ */
 export default function App() {
   // --- Roteamento por hash (sem biblioteca) ---
@@ -505,7 +582,7 @@ export default function App() {
     window.addEventListener('hashchange', handler);
     return () => window.removeEventListener('hashchange', handler);
   }, []);
-    const [checking, setChecking] = useState(true);
+  const [checking, setChecking] = useState(true);
   const [logged, setLogged] = useState(false);
   const [perfil, setPerfil] = useState(null);
   const [erroPerfil, setErroPerfil] = useState("");
@@ -544,22 +621,17 @@ export default function App() {
 
   const logout = async () => { await sair(); };
 
-  if (rota === '#/inscricao') {
-      return React.createElement('div', { className: 'kl-body' },
-                                     React.createElement('style', null, fontStyles),
-                                     React.createElement(PreMatricula)
-                                   );
-  }
-  
+  if (rota === '#/inscricao') return <PreMatricula />;
+  if (rota === '#/primeiro-acesso') return <PrimeiroAcesso onLogged={() => { window.location.hash = "#/"; }} />;
   return (
     <div className="kl-body" style={{ minHeight: "100vh", background: T.paper }}>
       <style>{fontStyles}</style>
 
-      {checking && <Spinner label="Iniciandoâ¦" />}
+      {checking && <Spinner label="Iniciando…" />}
 
       {!checking && !logged && <LoginScreen onLogged={() => {}} />}
 
-      {!checking && logged && !perfil && !erroPerfil && <Spinner label="Carregando seu perfilâ¦" />}
+      {!checking && logged && !perfil && !erroPerfil && <Spinner label="Carregando seu perfil…" />}
 
       {!checking && logged && erroPerfil && (
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: 48, gap: 12 }}>

@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { criarPreMatricula } from "./lib/api";
+import React, { useEffect, useState } from "react";
+import { criarPreMatricula, listarCursosPublico } from "./lib/api";
 
 // ---------- Identidade visual (espelhada do App.jsx) ----------
 const T = {
@@ -58,9 +58,25 @@ export default function PreMatricula() {
   const [nome, setNome] = useState("");
   const [email, setEmail] = useState("");
   const [telefone, setTelefone] = useState("");
+  const [cursoId, setCursoId] = useState("");
+  const [cursos, setCursos] = useState([]);
   const [loading, setLoading] = useState(false);
   const [sucesso, setSucesso] = useState(false);
   const [erro, setErro] = useState("");
+
+  useEffect(() => {
+    let ativo = true;
+    listarCursosPublico()
+      .then((data) => {
+        if (ativo) setCursos(data);
+      })
+      .catch(() => {
+        if (ativo) setErro("Não foi possível carregar os cursos disponíveis.");
+      });
+    return () => {
+      ativo = false;
+    };
+  }, []);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -74,7 +90,7 @@ export default function PreMatricula() {
     try {
       await criarPreMatricula({
         tenantId: import.meta.env.VITE_TENANT_ID,
-        cursoId: null,
+        cursoId: cursoId || null,
         origem: "site",
         nome,
         email,
@@ -137,6 +153,27 @@ export default function PreMatricula() {
               placeholder="seu@email.com" required />
             <Campo label="Telefone / WhatsApp" value={telefone}
               onChange={setTelefone} placeholder="(00) 00000-0000" />
+            <div style={{ marginTop: 16 }}>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 600,
+                color: T.muted, marginBottom: 4 }}>
+                Curso de interesse
+              </label>
+              <select
+                value={cursoId}
+                onChange={(e) => setCursoId(e.target.value)}
+                style={{
+                  width: "100%", padding: "10px 14px", borderRadius: 10,
+                  border: "1.5px solid #D0E6DA", fontSize: 14, fontFamily: FONT,
+                  outline: "none", boxSizing: "border-box", color: T.ink,
+                  background: "#fff",
+                }}
+              >
+                <option value="">Quero conhecer os cursos</option>
+                {cursos.map((curso) => (
+                  <option key={curso.id} value={curso.id}>{curso.nome}</option>
+                ))}
+              </select>
+            </div>
             {erro && (
               <div style={{ marginTop: 12, fontSize: 13, color: "#c0392b",
                 background: "#fdf0ef", borderRadius: 8, padding: "8px 12px" }}>

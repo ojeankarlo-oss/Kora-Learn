@@ -1,5 +1,5 @@
 // ============================================================
-// KORA LEARN â Cliente Supabase
+// KORA LEARN — Cliente Supabase
 // Instalacao no projeto Vite:  npm install @supabase/supabase-js
 // ============================================================
 import { createClient } from "@supabase/supabase-js";
