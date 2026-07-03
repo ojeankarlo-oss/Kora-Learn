@@ -505,8 +505,7 @@ export default function App() {
     window.addEventListener('hashchange', handler);
     return () => window.removeEventListener('hashchange', handler);
   }, []);
-  if (rota === '#/inscricao') return <PreMatricula />;
-  const [checking, setChecking] = useState(true);
+    const [checking, setChecking] = useState(true);
   const [logged, setLogged] = useState(false);
   const [perfil, setPerfil] = useState(null);
   const [erroPerfil, setErroPerfil] = useState("");
@@ -545,6 +544,13 @@ export default function App() {
 
   const logout = async () => { await sair(); };
 
+  if (rota === '#/inscricao') {
+      return React.createElement('div', { className: 'kl-body' },
+                                     React.createElement('style', null, fontStyles),
+                                     React.createElement(PreMatricula)
+                                   );
+  }
+  
   return (
     <div className="kl-body" style={{ minHeight: "100vh", background: T.paper }}>
       <style>{fontStyles}</style>
