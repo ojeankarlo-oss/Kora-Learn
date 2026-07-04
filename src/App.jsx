@@ -396,7 +396,7 @@ function AlunoApp({ perfil, onLogout, toast }) {
    GESTOR
    ============================================================ */
 function GestorApp({ perfil, onLogout, toast }) {
-  const [activeTab, setActiveTab] = useState("overview");
+  const [activeTab, setActiveTab] = useState("leads");
   const [kpis, setKpis] = useState(null);
   const [leads, setLeads] = useState(null);
   const [cursos, setCursos] = useState([]);
@@ -528,6 +528,16 @@ function GestorApp({ perfil, onLogout, toast }) {
           </div>
         )}
 
+    <div style={{ marginTop: 24, display: "flex", gap: 8 }}>
+      <button onClick={() => setActiveTab("leads")} style={{ background: activeTab === "leads" ? T.forest : "none", color: activeTab === "leads" ? "#fff" : T.muted, border: activeTab === "leads" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
+        Leads
+      </button>
+      <button onClick={() => setActiveTab("alunos")} style={{ background: activeTab === "alunos" ? T.forest : "none", color: activeTab === "alunos" ? "#fff" : T.muted, border: activeTab === "alunos" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
+        Alunos
+      </button>
+    </div>
+    {activeTab === "leads" && (
+      <>
         <div style={{ marginTop: 24, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <Eyebrow>Pré-matrículas (leads)</Eyebrow>
           <button onClick={carregar} style={{ background: "none", border: "none", color: T.forest, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}>
@@ -566,6 +576,65 @@ function GestorApp({ perfil, onLogout, toast }) {
             ))}
           </Card>
         )}
+      </>
+    )}
+    {activeTab === "alunos" && (
+      <>
+        <div style={{ marginTop: 24, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <Eyebrow>Alunos matriculados</Eyebrow>
+          <button onClick={carregarMatriculas} style={{ background: "none", border: "none", color: T.forest, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}>
+            <RefreshCw size={12} /> Atualizar
+          </button>
+        </div>
+        <input
+          value={buscaAluno}
+          onChange={(e) => setBuscaAluno(e.target.value)}
+          placeholder="Buscar aluno por nome ou e-mail"
+          style={{ marginTop: 8, width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid " + T.line, fontSize: 13, boxSizing: "border-box" }}
+        />
+        {matriculasLoading ? <Spinner label="Carregando alunos…" /> : matriculasError ? (
+          <Card style={{ marginTop: 8, padding: 24, textAlign: "center" }}>
+            <AlertTriangle size={26} color={T.danger} />
+            <div style={{ fontSize: 13, color: T.muted, marginTop: 6 }}>{matriculasError}</div>
+          </Card>
+        ) : matriculasFiltradas.length === 0 ? (
+          <Card style={{ marginTop: 8, padding: 24, textAlign: "center" }}>
+            <Users size={26} color={T.muted} />
+            <div style={{ fontSize: 13, color: T.muted, marginTop: 6 }}>
+              Nenhum aluno matriculado encontrado.
+            </div>
+          </Card>
+        ) : (
+          <Card style={{ marginTop: 8, overflow: "hidden" }}>
+            {matriculasFiltradas.map((m, i) => (
+              <div key={m.id} style={{ padding: "12px 14px", borderTop: i ? "1px solid " + T.line : "none", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{m.aluno?.nome ?? "Aluno"}</div>
+                  <div style={{ fontSize: 12, color: T.muted }}>
+                    {m.aluno?.email}{m.curso?.nome ? " · " + m.curso.nome : ""}
+                  </div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 999, ...badgeStyle(m.situacao) }}>
+                    {m.situacao === "ativa" ? "Ativa" : m.situacao === "cancelada" ? "Cancelada" : m.situacao === "concluida" ? "Concluída" : m.situacao === "trancada" ? "Trancada" : m.situacao}
+                  </span>
+                  {m.situacao === "ativa" && (
+                    <button onClick={() => handleSituacaoMatricula(m, "cancelada")} style={{ background: T.danger, color: "#fff", border: "none", borderRadius: 10, padding: "8px 12px", fontSize: 12, fontWeight: 700 }}>
+                      Cancelar matrícula
+                    </button>
+                  )}
+                  {m.situacao === "cancelada" && (
+                    <button onClick={() => handleSituacaoMatricula(m, "ativa")} style={{ background: T.forest, color: "#fff", border: "none", borderRadius: 10, padding: "8px 12px", fontSize: 12, fontWeight: 700 }}>
+                      Reativar matrícula
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </Card>
+        )}
+      </>
+    )}
       </div>
     </div>
   );
