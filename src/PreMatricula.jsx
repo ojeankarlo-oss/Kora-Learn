@@ -81,8 +81,10 @@ export default function PreMatricula() {
   async function handleSubmit(e) {
     e.preventDefault();
     setErro("");
-    const emailRegex = /^[^s@]+@[^s@]+.[^s@]+$/;
-    if (!emailRegex.test(email)) {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
+    const normalizedEmail = email.trim().toLowerCase();
+
+    if (!emailRegex.test(normalizedEmail)) {
       setErro("Por favor, informe um e-mail válido.");
       return;
     }
@@ -93,7 +95,7 @@ export default function PreMatricula() {
         cursoId: cursoId || null,
         origem: "site",
         nome,
-        email,
+        email: normalizedEmail,
         telefone,
       });
       setSucesso(true);
