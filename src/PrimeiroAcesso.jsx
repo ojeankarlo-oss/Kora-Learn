@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from "react";
+import { Eye, EyeOff } from "lucide-react";
 import { primeiroAcesso } from "./lib/api";
 
 const T = {
@@ -21,6 +22,34 @@ function LogoKora({ light = false, size = 32 }) {
       <text x="55" y="28" fontFamily={FONT} fontSize="20" fontWeight="700" fill={c}>KORA</text>
       <text x="55" y="38" fontFamily={FONT} fontSize="9" fontWeight="400" fill={light ? "#FFFFFF88" : T.muted} letterSpacing="2">LEARN</text>
     </svg>
+  );
+}
+
+function PasswordField({ label, value, onChange, placeholder, autoComplete = "new-password" }) {
+  const [show, setShow] = useState(false);
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 4 }}>{label}</label>
+      <div style={{ position: "relative" }}>
+        <input
+          type={show ? "text" : "password"}
+          value={value}
+          onChange={onChange}
+          placeholder={placeholder}
+          autoComplete={autoComplete}
+          style={{ width: "100%", boxSizing: "border-box", padding: "10px 42px 10px 12px", borderRadius: 10, border: `1.5px solid ${T.line}`, fontSize: 14 }}
+        />
+        <button
+          type="button"
+          aria-label={show ? "Ocultar senha" : "Mostrar senha"}
+          onClick={() => setShow((prev) => !prev)}
+          style={{ position: "absolute", top: "50%", right: 8, transform: "translateY(-50%)", background: "transparent", border: "none", color: T.muted, display: "flex", alignItems: "center", justifyContent: "center", padding: 4 }}
+        >
+          {show ? <EyeOff size={18} /> : <Eye size={18} />}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -91,11 +120,21 @@ export default function PrimeiroAcesso({ onLogged }) {
           <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 4 }}>E-mail</label>
           <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="seu@email.com" style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", borderRadius: 10, border: `1.5px solid ${T.line}`, fontSize: 14, marginBottom: 12 }} />
 
-          <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 4 }}>Senha</label>
-          <input type="password" value={senha} onChange={(e) => setSenha(e.target.value)} placeholder="Mínimo 8 caracteres" style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", borderRadius: 10, border: `1.5px solid ${T.line}`, fontSize: 14, marginBottom: 12 }} />
+          <PasswordField
+            label="Senha"
+            value={senha}
+            onChange={(e) => setSenha(e.target.value)}
+            placeholder="Mínimo 8 caracteres"
+            autoComplete="new-password"
+          />
 
-          <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 4 }}>Confirmar senha</label>
-          <input type="password" value={confirmarSenha} onChange={(e) => setConfirmarSenha(e.target.value)} placeholder="Repita a senha" style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", borderRadius: 10, border: `1.5px solid ${T.line}`, fontSize: 14, marginBottom: 12 }} />
+          <PasswordField
+            label="Confirmar senha"
+            value={confirmarSenha}
+            onChange={(e) => setConfirmarSenha(e.target.value)}
+            placeholder="Repita a senha"
+            autoComplete="new-password"
+          />
 
           {erro && <div style={{ marginBottom: 10, padding: "8px 10px", borderRadius: 8, background: "#FCECEA", color: "#B93B2D", fontSize: 13 }}>{erro}</div>}
           {info && <div style={{ marginBottom: 10, padding: "8px 10px", borderRadius: 8, background: "#EAF6F0", color: T.forest, fontSize: 13 }}>{info}</div>}

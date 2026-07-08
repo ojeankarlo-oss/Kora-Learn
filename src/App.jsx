@@ -7,7 +7,8 @@ import React, { useState, useEffect, useCallback } from "react";
 import {
   Home, PlayCircle, BookOpen, Bell, ChevronRight, CheckCircle2, Lock,
   Flame, Trophy, Star, Users, AlertTriangle, LogOut, GraduationCap,
-  FileText, Clock, TrendingUp, Loader2, Inbox, UserPlus, RefreshCw
+  FileText, Clock, TrendingUp, Loader2, Inbox, UserPlus, RefreshCw,
+  Eye, EyeOff
 } from "lucide-react";
 import { supabase } from "./lib/supabaseClient";
 import PreMatricula from "./PreMatricula";
@@ -112,6 +113,37 @@ function Spinner({ label = "Carregando…" }) {
   );
 }
 
+function PasswordField({ label, value, onChange, placeholder, onKeyDown, autoComplete = "current-password", containerStyle = {} }) {
+  const [show, setShow] = useState(false);
+
+  return (
+    <div style={{ marginTop: 12, ...containerStyle }}>
+      {label && (
+        <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 4 }}>{label}</label>
+      )}
+      <div style={{ position: "relative", marginTop: 4 }}>
+        <input
+          type={show ? "text" : "password"}
+          value={value}
+          onChange={onChange}
+          placeholder={placeholder}
+          onKeyDown={onKeyDown}
+          autoComplete={autoComplete}
+          style={{ width: "100%", boxSizing: "border-box", padding: "10px 42px 10px 12px", borderRadius: 12, border: `1.5px solid ${T.line}`, fontSize: 14, color: T.ink, outline: "none" }}
+        />
+        <button
+          type="button"
+          aria-label={show ? "Ocultar senha" : "Mostrar senha"}
+          onClick={() => setShow((prev) => !prev)}
+          style={{ position: "absolute", top: "50%", right: 8, transform: "translateY(-50%)", background: "transparent", border: "none", color: T.muted, display: "flex", alignItems: "center", justifyContent: "center", padding: 4 }}
+        >
+          {show ? <EyeOff size={18} /> : <Eye size={18} />}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ============================================================
    LOGIN (real)
    ============================================================ */
@@ -162,10 +194,14 @@ function LoginScreen({ onLogged }) {
           onKeyDown={(e) => e.key === "Enter" && entrar()}
           style={{ width: "100%", boxSizing: "border-box", marginTop: 4, padding: "10px 12px", borderRadius: 12, border: `1.5px solid ${T.line}`, fontSize: 14, color: T.ink, outline: "none" }} />
 
-        <label style={{ display: "block", marginTop: 12, fontSize: 12, fontWeight: 600, color: T.muted }}>Senha</label>
-        <input type="password" value={senha} onChange={(e) => setSenha(e.target.value)} placeholder="••••••••"
+        <PasswordField
+          label="Senha"
+          value={senha}
+          onChange={(e) => setSenha(e.target.value)}
+          placeholder="••••••••"
           onKeyDown={(e) => e.key === "Enter" && entrar()}
-          style={{ width: "100%", boxSizing: "border-box", marginTop: 4, padding: "10px 12px", borderRadius: 12, border: `1.5px solid ${T.line}`, fontSize: 14, color: T.ink, outline: "none" }} />
+          autoComplete="current-password"
+        />
 
         {erro && (
           <div style={{ marginTop: 12, padding: 10, borderRadius: 12, background: "#FBEFEC", color: T.danger, fontSize: 13, fontWeight: 500 }}>
@@ -178,12 +214,233 @@ function LoginScreen({ onLogged }) {
           {loading ? "Entrando…" : "Entrar"}
         </button>
 
+        <button onClick={() => { window.location.hash = "#/recuperar-senha"; }} style={{ width: "100%", marginTop: 10, background: "transparent", border: "none", color: T.forest, fontSize: 13, fontWeight: 600 }}>
+          Esqueci minha senha
+        </button>
+
         <button onClick={irParaPrimeiroAcesso} style={{ width: "100%", marginTop: 10, background: "transparent", border: "none", color: T.forest, fontSize: 13, fontWeight: 600 }}>
           Primeiro acesso? Crie sua senha
         </button>
       </div>
       <div style={{ marginTop: 20, fontSize: 12, color: "#9DBBAF" }}>
         KORA Gestão Educacional · MVP
+      </div>
+    </div>
+  );
+}
+
+function RecuperarSenhaScreen() {
+  const [email, setEmail] = useState("");
+  const [erro, setErro] = useState("");
+  const [sucesso, setSucesso] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const voltarAoLogin = () => {
+    window.location.hash = "#/";
+  };
+
+  const enviar = async (event) => {
+    event.preventDefault();
+    setErro("");
+    setSucesso("");
+
+    const emailFormatado = email.trim().toLowerCase();
+    if (!emailFormatado) {
+      setErro("Informe seu e-mail para continuar.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await supabase.auth.resetPasswordForEmail(emailFormatado, {
+        redirectTo: `${window.location.origin}/Kora-Learn/#/redefinir-senha`,
+      });
+      setSucesso("Se este e-mail estiver cadastrado, enviamos um link de recuperação. Verifique também o spam.");
+      setEmail("");
+    } catch (error) {
+      setSucesso("Se este e-mail estiver cadastrado, enviamos um link de recuperação. Verifique também o spam.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="kl-body" style={{ minHeight: "100vh", background: T.forestDark, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ width: "100%", maxWidth: 400, background: "#fff", borderRadius: 24, padding: 24 }}>
+        <div style={{ textAlign: "center", marginBottom: 18 }}>
+          <LogoKora light={false} size={24} />
+          <div className="kl-display" style={{ fontSize: 18, fontWeight: 700, color: T.ink, marginTop: 12 }}>Recuperar senha</div>
+          <div style={{ fontSize: 13, color: T.muted, marginTop: 8, lineHeight: 1.5 }}>
+            Informe seu e-mail para receber um link de redefinição.
+          </div>
+        </div>
+
+        <form onSubmit={enviar}>
+          <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 4 }}>E-mail</label>
+          <input
+            type="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            placeholder="voce@exemplo.com"
+            onKeyDown={(event) => event.key === "Enter" && enviar(event)}
+            style={{ width: "100%", boxSizing: "border-box", padding: "10px 12px", borderRadius: 12, border: `1.5px solid ${T.line}`, fontSize: 14, color: T.ink, outline: "none" }}
+          />
+
+          {erro && (
+            <div style={{ marginTop: 12, padding: 10, borderRadius: 12, background: "#FBEFEC", color: T.danger, fontSize: 13, fontWeight: 500 }}>
+              {erro}
+            </div>
+          )}
+
+          {sucesso && (
+            <div style={{ marginTop: 12, padding: 10, borderRadius: 12, background: "#EAF6F0", color: T.forest, fontSize: 13, fontWeight: 500 }}>
+              {sucesso}
+            </div>
+          )}
+
+          <button type="submit" disabled={loading} style={{ width: "100%", marginTop: 16, padding: 13, borderRadius: 12, border: "none", background: loading ? "#9DB5AC" : T.forest, color: "#fff", fontWeight: 600, fontSize: 14 }}>
+            {loading ? "Enviando…" : "Enviar link"}
+          </button>
+        </form>
+
+        <button onClick={voltarAoLogin} style={{ width: "100%", marginTop: 10, background: "transparent", border: "none", color: T.forest, fontSize: 13, fontWeight: 600 }}>
+          Voltar ao login
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function RedefinirSenhaScreen({ onLogged }) {
+  const [senha, setSenha] = useState("");
+  const [confirmarSenha, setConfirmarSenha] = useState("");
+  const [erro, setErro] = useState("");
+  const [info, setInfo] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [recoveryReady, setRecoveryReady] = useState(false);
+
+  useEffect(() => {
+    let ativo = true;
+
+    const validarSessao = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (ativo) {
+        setRecoveryReady(!!session);
+      }
+    };
+
+    validarSessao();
+
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!ativo) return;
+      if (event === "PASSWORD_RECOVERY" || session) {
+        setRecoveryReady(true);
+      }
+    });
+
+    return () => {
+      ativo = false;
+      sub.subscription.unsubscribe();
+    };
+  }, []);
+
+  const redefinir = async (event) => {
+    event.preventDefault();
+    setErro("");
+    setInfo("");
+
+    if (senha.length < 8) {
+      setErro("A senha deve ter pelo menos 8 caracteres.");
+      return;
+    }
+
+    if (senha !== confirmarSenha) {
+      setErro("As senhas não conferem.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: senha });
+      if (error) {
+        const msg = error.message?.toLowerCase() || "";
+        if (msg.includes("expired") || msg.includes("invalid") || msg.includes("token")) {
+          setErro("O link de recuperação expirou ou é inválido. Solicite um novo link e tente novamente.");
+        } else {
+          setErro("Não foi possível redefinir a senha. Solicite um novo link e tente novamente.");
+        }
+        return;
+      }
+
+      setInfo("Senha redefinida! Entrando...");
+      window.setTimeout(() => {
+        if (onLogged) {
+          onLogged();
+        } else {
+          window.location.hash = "#/";
+        }
+      }, 900);
+    } catch (error) {
+      setErro("Não foi possível redefinir a senha. Solicite um novo link e tente novamente.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="kl-body" style={{ minHeight: "100vh", background: T.forestDark, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <div style={{ width: "100%", maxWidth: 400, background: "#fff", borderRadius: 24, padding: 24 }}>
+        <div style={{ textAlign: "center", marginBottom: 18 }}>
+          <LogoKora light={false} size={24} />
+          <div className="kl-display" style={{ fontSize: 18, fontWeight: 700, color: T.ink, marginTop: 12 }}>Redefinir senha</div>
+          <div style={{ fontSize: 13, color: T.muted, marginTop: 8, lineHeight: 1.5 }}>
+            Crie uma nova senha para acessar a plataforma.
+          </div>
+        </div>
+
+        {!recoveryReady && (
+          <div style={{ marginBottom: 12, padding: 10, borderRadius: 12, background: "#F2F6F4", color: T.muted, fontSize: 13 }}>
+            Validando o link de recuperação...
+          </div>
+        )}
+
+        <form onSubmit={redefinir}>
+          <PasswordField
+            label="Nova senha"
+            value={senha}
+            onChange={(event) => setSenha(event.target.value)}
+            placeholder="Mínimo 8 caracteres"
+            autoComplete="new-password"
+          />
+
+          <PasswordField
+            label="Confirmar senha"
+            value={confirmarSenha}
+            onChange={(event) => setConfirmarSenha(event.target.value)}
+            placeholder="Repita a senha"
+            autoComplete="new-password"
+          />
+
+          {erro && (
+            <div style={{ marginTop: 12, padding: 10, borderRadius: 12, background: "#FBEFEC", color: T.danger, fontSize: 13, fontWeight: 500 }}>
+              {erro}
+            </div>
+          )}
+
+          {info && (
+            <div style={{ marginTop: 12, padding: 10, borderRadius: 12, background: "#EAF6F0", color: T.forest, fontSize: 13, fontWeight: 500 }}>
+              {info}
+            </div>
+          )}
+
+          <button type="submit" disabled={loading || !recoveryReady} style={{ width: "100%", marginTop: 16, padding: 13, borderRadius: 12, border: "none", background: loading || !recoveryReady ? "#9DB5AC" : T.forest, color: "#fff", fontWeight: 600, fontSize: 14 }}>
+            {loading ? "Salvando…" : "Redefinir senha"}
+          </button>
+        </form>
+
+        <button onClick={() => { window.location.hash = "#/"; }} style={{ width: "100%", marginTop: 10, background: "transparent", border: "none", color: T.forest, fontSize: 13, fontWeight: 600 }}>
+          Voltar ao login
+        </button>
       </div>
     </div>
   );
@@ -692,6 +949,8 @@ export default function App() {
 
   if (rota === '#/inscricao') return <PreMatricula />;
   if (rota === '#/primeiro-acesso') return <PrimeiroAcesso onLogged={() => { window.location.hash = "#/"; }} />;
+  if (rota === '#/recuperar-senha') return <RecuperarSenhaScreen />;
+  if (rota === '#/redefinir-senha') return <RedefinirSenhaScreen onLogged={() => { window.location.hash = "#/"; }} />;
   return (
     <div className="kl-body" style={{ minHeight: "100vh", background: T.paper }}>
       <style>{fontStyles}</style>
