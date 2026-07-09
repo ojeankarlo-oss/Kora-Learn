@@ -192,3 +192,33 @@ export async function converterLead(lead, tenantId, cursoId, turmaId = null) {
 
   return novoAluno;
 }
+
+/* ---------------- TENANT (white-label) ---------------- */
+
+export async function obterTenantPublico(slug) {
+  const { data, error } = await supabase.rpc("obter_tenant_publico", { p_slug: slug });
+  if (error) throw error;
+  return data; // jsonb ou null
+}
+
+export async function meuTenant() {
+  const { data, error } = await supabase
+    .from("tenants")
+    .select("id, nome, slug, logo_url, config")
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function salvarConfigTenant({ nome, logo_url, config }) {
+  const atual = await meuTenant();
+  const { error } = await supabase
+    .from("tenants")
+    .update({
+      nome: nome ?? atual.nome,
+      logo_url: logo_url ?? atual.logo_url,
+      config: { ...(atual.config || {}), ...(config || {}) },
+    })
+    .eq("id", atual.id);
+  if (error) throw error;
+}

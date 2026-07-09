@@ -3,7 +3,7 @@
 // Salvar em: src/App.jsx  (projeto Vite React)
 // Depende de: src/lib/supabaseClient.js e src/lib/api.js
 // ============================================================
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, createContext, useContext } from "react";
 import {
   Home, PlayCircle, BookOpen, Bell, ChevronRight, CheckCircle2, Lock,
   Flame, Trophy, Star, Users, AlertTriangle, LogOut, GraduationCap,
@@ -11,21 +11,24 @@ import {
   Eye, EyeOff
 } from "lucide-react";
 import { supabase } from "./lib/supabaseClient";
+import { TEMA_PADRAO, montarTema } from "./theme";
 import PreMatricula from "./PreMatricula";
 import PrimeiroAcesso from "./PrimeiroAcesso";
 import {
   entrarComEmail, sair, meuPerfil, meusCursos, concluirAula,
   kpisDoTenant, listarLeads, listarCursos, converterLead,
-  listarMatriculas, atualizarSituacaoMatricula
+  listarMatriculas, atualizarSituacaoMatricula, meuTenant, salvarConfigTenant
 } from "./lib/api";
 
-/* ---------- Identidade visual ---------- */
-const T = {
-  ink: "#10201A", forest: "#17604A", forestDark: "#0E4536",
-  amber: "#E9A13B", amberSoft: "#FBEFDA", paper: "#F1F4F2",
-  card: "#FFFFFF", line: "#DDE5E1", muted: "#5C6E67",
-  danger: "#C24A3F", success: "#2E8B63",
-};
+/* ---------- Contexto de tema (white-label) ---------- */
+const TemaContext = createContext(TEMA_PADRAO);
+
+export function useTema() {
+  return useContext(TemaContext);
+}
+
+/* ---------- Identidade visual (padrão) ---------- */
+const T = TEMA_PADRAO;
 
 const fontStyles = `
 @import url('https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
@@ -43,6 +46,7 @@ body { margin: 0; }
 
 /* ---------- Assinatura: cordas de kora ---------- */
 function KoraStrings({ total, done, height = 46, gap = 9 }) {
+  const T = useTema();
   if (!total) return null;
   const width = (total - 1) * gap + 8;
   return (
@@ -64,6 +68,25 @@ function KoraStrings({ total, done, height = 46, gap = 9 }) {
 }
 
 function LogoKora({ light = false, size = 20 }) {
+  const T = useTema();
+  
+  // Se houver logo customizado, exibir a imagem
+  if (T.logo_url && !light) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <img 
+          src={T.logo_url} 
+          alt={T.nomeMarca}
+          style={{ height: size, borderRadius: 8, objectFit: "contain" }}
+        />
+        <span className="kl-display" style={{ fontWeight: 800, fontSize: size, color: T.ink }}>
+          {T.nomeMarca.split(" ")[0]}<span style={{ color: T.forest }}> {T.nomeMarca.split(" ").slice(1).join(" ")}</span>
+        </span>
+      </div>
+    );
+  }
+  
+  // Caso contrário, usar o logo desenhado
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <svg width={size + 6} height={size + 6} viewBox="0 0 26 26">
@@ -75,13 +98,14 @@ function LogoKora({ light = false, size = 20 }) {
         ))}
       </svg>
       <span className="kl-display" style={{ fontWeight: 800, fontSize: size, color: light ? "#fff" : T.ink }}>
-        KORA<span style={{ color: light ? T.amber : T.forest }}> Learn</span>
+        {T.nomeMarca.split(" ")[0]}<span style={{ color: light ? T.amber : T.forest }}> {T.nomeMarca.split(" ").slice(1).join(" ")}</span>
       </span>
     </div>
   );
 }
 
 function Card({ children, style = {} }) {
+  const T = useTema();
   return (
     <div style={{ background: T.card, border: `1px solid ${T.line}`, borderRadius: 18, ...style }}>
       {children}
@@ -89,11 +113,13 @@ function Card({ children, style = {} }) {
   );
 }
 
-function Eyebrow({ children, color = T.muted }) {
-  return <div className="kl-eyebrow" style={{ color }}>{children}</div>;
+function Eyebrow({ children, color }) {
+  const T = useTema();
+  return <div className="kl-eyebrow" style={{ color: color ?? T.muted }}>{children}</div>;
 }
 
 function Toast({ msg }) {
+  const T = useTema();
   if (!msg) return null;
   return (
     <div className="kl-fade" style={{ position: "fixed", bottom: 84, left: "50%", transform: "translateX(-50%)", zIndex: 50 }}>
@@ -105,6 +131,7 @@ function Toast({ msg }) {
 }
 
 function Spinner({ label = "Carregando…" }) {
+  const T = useTema();
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, padding: 48, color: T.muted }}>
       <Loader2 size={28} className="kl-spin" color={T.forest} />
@@ -114,6 +141,7 @@ function Spinner({ label = "Carregando…" }) {
 }
 
 function PasswordField({ label, value, onChange, placeholder, onKeyDown, autoComplete = "current-password", containerStyle = {} }) {
+  const T = useTema();
   const [show, setShow] = useState(false);
 
   return (
@@ -652,7 +680,8 @@ function AlunoApp({ perfil, onLogout, toast }) {
 /* ============================================================
    GESTOR
    ============================================================ */
-function GestorApp({ perfil, onLogout, toast }) {
+function GestorApp({ perfil, onLogout, toast, setTema }) {
+  const T = useTema();
   const [activeTab, setActiveTab] = useState("leads");
   const [kpis, setKpis] = useState(null);
   const [leads, setLeads] = useState(null);
@@ -661,6 +690,15 @@ function GestorApp({ perfil, onLogout, toast }) {
   const [matriculasLoading, setMatriculasLoading] = useState(false);
   const [matriculasError, setMatriculasError] = useState("");
   const [buscaAluno, setBuscaAluno] = useState("");
+  
+  // Configurações
+  const [configNome, setConfigNome] = useState("");
+  const [configLogoUrl, setConfigLogoUrl] = useState("");
+  const [configCorPrimaria, setConfigCorPrimaria] = useState(T.forest);
+  const [configCorDestaque, setConfigCorDestaque] = useState(T.amber);
+  const [configSlogan, setConfigSlogan] = useState(T.slogan);
+  const [configModulos, setConfigModulos] = useState(T.modulos || {});
+  const [savingConfig, setSavingConfig] = useState(false);
 
   const carregar = useCallback(async () => {
     try {
@@ -693,6 +731,18 @@ function GestorApp({ perfil, onLogout, toast }) {
 
   useEffect(() => { carregarMatriculas(); }, [carregarMatriculas]);
 
+  // Carregar dados atuais de configuração quando a aba é ativada
+  useEffect(() => {
+    if (activeTab === "configuracoes") {
+      setConfigNome(T.nomeMarca);
+      setConfigLogoUrl(T.logo_url || "");
+      setConfigCorPrimaria(T.forest);
+      setConfigCorDestaque(T.amber);
+      setConfigSlogan(T.slogan);
+      setConfigModulos(T.modulos || {});
+    }
+  }, [activeTab, T]);
+
   const converter = async (lead) => {
     if (!cursos.length) { toast("Cadastre um curso antes de converter"); return; }
     try {
@@ -719,6 +769,45 @@ function GestorApp({ perfil, onLogout, toast }) {
     } catch (e) {
       console.error(e);
       toast("Erro ao atualizar a matrícula");
+    }
+  };
+
+  const salvarConfiguracao = async () => {
+    setSavingConfig(true);
+    try {
+      await salvarConfigTenant({
+        nome: configNome,
+        logo_url: configLogoUrl,
+        config: {
+          marca: {
+            cor_primaria: configCorPrimaria,
+            cor_destaque: configCorDestaque,
+            slogan: configSlogan,
+          },
+          modulos: configModulos,
+        },
+      });
+      toast("Configurações salvas! 🎉");
+      
+      // Atualizar o tema na hora
+      const novoTema = montarTema({
+        id: "",
+        nome: configNome,
+        slug: "",
+        logo_url: configLogoUrl,
+        marca: {
+          cor_primaria: configCorPrimaria,
+          cor_destaque: configCorDestaque,
+          slogan: configSlogan,
+        },
+        modulos: configModulos,
+      });
+      setTema(novoTema);
+    } catch (e) {
+      console.error(e);
+      toast("Erro ao salvar as configurações");
+    } finally {
+      setSavingConfig(false);
     }
   };
 
@@ -789,8 +878,13 @@ function GestorApp({ perfil, onLogout, toast }) {
       <button onClick={() => setActiveTab("leads")} style={{ background: activeTab === "leads" ? T.forest : "none", color: activeTab === "leads" ? "#fff" : T.muted, border: activeTab === "leads" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
         Leads
       </button>
-      <button onClick={() => setActiveTab("alunos")} style={{ background: activeTab === "alunos" ? T.forest : "none", color: activeTab === "alunos" ? "#fff" : T.muted, border: activeTab === "alunos" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
-        Alunos
+      {T.modulos?.alunos !== false && (
+        <button onClick={() => setActiveTab("alunos")} style={{ background: activeTab === "alunos" ? T.forest : "none", color: activeTab === "alunos" ? "#fff" : T.muted, border: activeTab === "alunos" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
+          Alunos
+        </button>
+      )}
+      <button onClick={() => setActiveTab("configuracoes")} style={{ background: activeTab === "configuracoes" ? T.forest : "none", color: activeTab === "configuracoes" ? "#fff" : T.muted, border: activeTab === "configuracoes" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
+        Configurações
       </button>
     </div>
     {activeTab === "leads" && (
@@ -892,6 +986,173 @@ function GestorApp({ perfil, onLogout, toast }) {
         )}
       </>
     )}
+    {activeTab === "configuracoes" && (
+      <>
+        <Eyebrow style={{ marginTop: 24 }}>Configurações da instituição</Eyebrow>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 12 }}>
+          {/* Esquerda: Formulário */}
+          <div>
+            <Card style={{ padding: 20 }}>
+              {/* Nome */}
+              <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 4 }}>
+                Nome da instituição
+              </label>
+              <input
+                type="text"
+                value={configNome}
+                onChange={(e) => setConfigNome(e.target.value)}
+                placeholder={T.nomeMarca}
+                style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: `1px solid ${T.line}`, fontSize: 14, color: T.ink, boxSizing: "border-box", outline: "none" }}
+              />
+
+              {/* Logo URL */}
+              <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 4, marginTop: 12 }}>
+                URL do logo
+              </label>
+              <input
+                type="text"
+                value={configLogoUrl}
+                onChange={(e) => setConfigLogoUrl(e.target.value)}
+                placeholder="https://..."
+                style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: `1px solid ${T.line}`, fontSize: 14, color: T.ink, boxSizing: "border-box", outline: "none" }}
+              />
+
+              {/* Cor Primária */}
+              <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 8, marginTop: 12 }}>
+                Cor primária
+              </label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  type="color"
+                  value={configCorPrimaria}
+                  onChange={(e) => setConfigCorPrimaria(e.target.value)}
+                  style={{ width: 50, height: 40, border: `1px solid ${T.line}`, borderRadius: 10, cursor: "pointer" }}
+                />
+                <input
+                  type="text"
+                  value={configCorPrimaria}
+                  onChange={(e) => /^#[0-9A-F]{6}$/.test(e.target.value) && setConfigCorPrimaria(e.target.value)}
+                  placeholder="#000000"
+                  style={{ flex: 1, padding: "8px 12px", borderRadius: 10, border: `1px solid ${T.line}`, fontSize: 12, color: T.ink, boxSizing: "border-box", outline: "none" }}
+                />
+              </div>
+
+              {/* Cor de Destaque */}
+              <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 8, marginTop: 12 }}>
+                Cor de destaque
+              </label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  type="color"
+                  value={configCorDestaque}
+                  onChange={(e) => setConfigCorDestaque(e.target.value)}
+                  style={{ width: 50, height: 40, border: `1px solid ${T.line}`, borderRadius: 10, cursor: "pointer" }}
+                />
+                <input
+                  type="text"
+                  value={configCorDestaque}
+                  onChange={(e) => /^#[0-9A-F]{6}$/.test(e.target.value) && setConfigCorDestaque(e.target.value)}
+                  placeholder="#000000"
+                  style={{ flex: 1, padding: "8px 12px", borderRadius: 10, border: `1px solid ${T.line}`, fontSize: 12, color: T.ink, boxSizing: "border-box", outline: "none" }}
+                />
+              </div>
+
+              {/* Slogan */}
+              <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 4, marginTop: 12 }}>
+                Slogan
+              </label>
+              <textarea
+                value={configSlogan}
+                onChange={(e) => setConfigSlogan(e.target.value)}
+                placeholder={T.slogan}
+                style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: `1px solid ${T.line}`, fontSize: 14, color: T.ink, boxSizing: "border-box", outline: "none", fontFamily: "inherit", minHeight: 60 }}
+              />
+
+              {/* Módulos */}
+              <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${T.line}` }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: T.ink, marginBottom: 12 }}>Módulos</div>
+                {["inscricao_publica", "alunos"].map((modulo) => (
+                  <label key={modulo} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={configModulos[modulo] !== false}
+                      onChange={(e) => setConfigModulos({ ...configModulos, [modulo]: e.target.checked })}
+                      style={{ cursor: "pointer" }}
+                    />
+                    <span style={{ fontSize: 13, color: T.ink }}>
+                      {modulo === "inscricao_publica" ? "Inscrição pública" : modulo === "alunos" ? "Alunos" : modulo}
+                    </span>
+                  </label>
+                ))}
+                {["financeiro", "documentos"].map((modulo) => (
+                  <label key={modulo} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, cursor: "pointer", opacity: 0.6 }}>
+                    <input
+                      type="checkbox"
+                      disabled
+                      checked={false}
+                      style={{ cursor: "not-allowed" }}
+                    />
+                    <span style={{ fontSize: 13, color: T.muted }}>
+                      {modulo === "financeiro" ? "Financeiro (em breve)" : "Documentos (em breve)"}
+                    </span>
+                  </label>
+                ))}
+              </div>
+
+              {/* Botão Salvar */}
+              <button
+                onClick={salvarConfiguracao}
+                disabled={savingConfig}
+                style={{
+                  width: "100%",
+                  marginTop: 16,
+                  padding: "12px",
+                  borderRadius: 12,
+                  border: "none",
+                  background: savingConfig ? T.muted : T.forest,
+                  color: "#fff",
+                  fontWeight: 700,
+                  fontSize: 14,
+                  cursor: savingConfig ? "not-allowed" : "pointer",
+                }}
+              >
+                {savingConfig ? "Salvando..." : "Salvar configurações"}
+              </button>
+            </Card>
+          </div>
+
+          {/* Direita: Pré-visualização */}
+          <div>
+            <Card style={{ padding: 20, background: configCorPrimaria }}>
+              <div style={{ textAlign: "center", color: "#fff" }}>
+                <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 8 }}>PRÉ-VISUALIZAÇÃO</div>
+                {configLogoUrl && (
+                  <img
+                    src={configLogoUrl}
+                    alt="Logo"
+                    style={{ height: 40, borderRadius: 8, marginBottom: 12, objectFit: "contain" }}
+                  />
+                )}
+                <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 4 }}>{configNome || T.nomeMarca}</div>
+                <div style={{ fontSize: 12, opacity: 0.8, lineHeight: 1.4 }}>{configSlogan}</div>
+              </div>
+              
+              <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid rgba(255,255,255,0.2)" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#fff", marginBottom: 8 }}>Cores</div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <div style={{ flex: 1, padding: 8, background: configCorDestaque, borderRadius: 8, fontSize: 11, fontWeight: 600, color: "#000", textAlign: "center" }}>
+                    Destaque
+                  </div>
+                  <div style={{ flex: 1, padding: 8, background: configCorPrimaria, borderRadius: 8, fontSize: 11, fontWeight: 600, color: "#fff", textAlign: "center", border: "2px solid #fff" }}>
+                    Primária
+                  </div>
+                </div>
+              </div>
+            </Card>
+          </div>
+        </div>
+      </>
+    )}
       </div>
     </div>
   );
@@ -913,6 +1174,7 @@ export default function App() {
   const [perfil, setPerfil] = useState(null);
   const [erroPerfil, setErroPerfil] = useState("");
   const [toastMsg, setToastMsg] = useState("");
+  const [tema, setTema] = useState(TEMA_PADRAO);
 
   const toast = useCallback((msg) => {
     setToastMsg(msg);
@@ -925,6 +1187,24 @@ export default function App() {
       const p = await meuPerfil();
       if (!p) { setErroPerfil("Sua conta existe, mas não está vinculada a uma escola. Fale com o administrador."); return; }
       setPerfil(p);
+      
+      // Carregar tenant e aplicar tema
+      try {
+        const t = await meuTenant();
+        if (t) {
+          const temaMontado = montarTema({
+            id: t.id,
+            nome: t.nome,
+            slug: t.slug,
+            logo_url: t.logo_url,
+            marca: t.config?.marca || {},
+            modulos: t.config?.modulos || {},
+          });
+          setTema(temaMontado);
+        }
+      } catch (e) {
+        console.warn("Não foi possível carregar o tenant, usando tema padrão", e);
+      }
     } catch (e) {
       console.error(e);
       setErroPerfil("Não foi possível carregar seu perfil.");
@@ -951,33 +1231,36 @@ export default function App() {
   if (rota === '#/primeiro-acesso') return <PrimeiroAcesso onLogged={() => { window.location.hash = "#/"; }} />;
   if (rota === '#/recuperar-senha') return <RecuperarSenhaScreen />;
   if (rota === '#/redefinir-senha') return <RedefinirSenhaScreen onLogged={() => { window.location.hash = "#/"; }} />;
+  
   return (
-    <div className="kl-body" style={{ minHeight: "100vh", background: T.paper }}>
-      <style>{fontStyles}</style>
+    <TemaContext.Provider value={tema}>
+      <div className="kl-body" style={{ minHeight: "100vh", background: tema.paper }}>
+        <style>{fontStyles}</style>
 
-      {checking && <Spinner label="Iniciando…" />}
+        {checking && <Spinner label="Iniciando…" />}
 
-      {!checking && !logged && <LoginScreen onLogged={() => {}} />}
+        {!checking && !logged && <LoginScreen onLogged={() => {}} />}
 
-      {!checking && logged && !perfil && !erroPerfil && <Spinner label="Carregando seu perfil…" />}
+        {!checking && logged && !perfil && !erroPerfil && <Spinner label="Carregando seu perfil…" />}
 
-      {!checking && logged && erroPerfil && (
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: 48, gap: 12 }}>
-          <AlertTriangle size={28} color={T.danger} />
-          <div style={{ fontSize: 14, color: T.ink, textAlign: "center", maxWidth: 320 }}>{erroPerfil}</div>
-          <button onClick={logout} style={{ padding: "10px 20px", borderRadius: 12, border: "none", background: T.forest, color: "#fff", fontWeight: 600 }}>
-            Sair
-          </button>
-        </div>
-      )}
+        {!checking && logged && erroPerfil && (
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: 48, gap: 12 }}>
+            <AlertTriangle size={28} color={tema.danger} />
+            <div style={{ fontSize: 14, color: tema.ink, textAlign: "center", maxWidth: 320 }}>{erroPerfil}</div>
+            <button onClick={logout} style={{ padding: "10px 20px", borderRadius: 12, border: "none", background: tema.forest, color: "#fff", fontWeight: 600 }}>
+              Sair
+            </button>
+          </div>
+        )}
 
-      {!checking && logged && perfil && (
-        ["super_admin", "gestor"].includes(perfil.perfil)
-          ? <GestorApp perfil={perfil} onLogout={logout} toast={toast} />
-          : <AlunoApp perfil={perfil} onLogout={logout} toast={toast} />
-      )}
+        {!checking && logged && perfil && (
+          ["super_admin", "gestor"].includes(perfil.perfil)
+            ? <GestorApp perfil={perfil} onLogout={logout} toast={toast} setTema={setTema} />
+            : <AlunoApp perfil={perfil} onLogout={logout} toast={toast} />
+        )}
 
-      <Toast msg={toastMsg} />
-    </div>
+        <Toast msg={toastMsg} />
+      </div>
+    </TemaContext.Provider>
   );
 }
