@@ -1183,7 +1183,7 @@ export default function App() {
   React.useEffect(() => {
     const handler = () => setRota(getRouteFromHash(window.location.hash));
     window.addEventListener('hashchange', handler);
-    return () => window.removeEventListener('hashchange', handler);
+        return () => window.removeEventListener('hashchange', handler);
   }, []);
   const [checking, setChecking] = useState(true);
   const [logged, setLogged] = useState(false);
@@ -1246,10 +1246,12 @@ export default function App() {
 
   const logout = async () => { await sair(); };
 
-  if (rota === '#/inscricao') return <PreMatricula />;
-  if (rota === '#/primeiro-acesso') return <PrimeiroAcesso onLogged={() => { window.location.hash = "#/"; }} />;
-  if (rota === '#/recuperar-senha') return <RecuperarSenhaScreen />;
-  if (rota === '#/redefinir-senha') return <RedefinirSenhaScreen onLogged={() => { window.location.hash = "#/"; }} />;
+// Roteamento por caminho, ignorando query string (ex.: "#/inscricao?t=slug")
+    const [caminhoRota] = (rota || "#/").split("?");
+  if (caminhoRota === '#/inscricao') return <PreMatricula />;
+  if (caminhoRota === '#/primeiro-acesso') return <PrimeiroAcesso onLogged={() => { window.location.hash = "#/"; }} />;
+  if (caminhoRota === '#/recuperar-senha') return <RecuperarSenhaScreen />;
+  if (caminhoRota === '#/redefinir-senha') return <RedefinirSenhaScreen onLogged={() => { window.location.hash = "#/"; }} />;
   
   return (
     <TemaContext.Provider value={tema}>
