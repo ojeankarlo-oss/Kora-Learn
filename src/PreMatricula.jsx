@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { criarPreMatricula, listarCursosPublico, obterTenantPublico } from "./lib/api";
+import { criarPreMatricula, listarCursosPublico, obterTenantPublico, listarUnidadesPublico } from "./lib/api";
 import { TEMA_PADRAO, montarTema } from "./theme";
 
 function LogoKoraImg({ logo_url, nomeMarca, T, size = 32 }) {
@@ -73,6 +73,8 @@ export default function PreMatricula() {
   const [tenantNaoEncontrado, setTenantNaoEncontrado] = useState(false);
   const [inscricaoEncerrada, setInscricaoEncerrada] = useState(false);
   const [tenantId, setTenantId] = useState(null);
+  const [unidadesPublico, setUnidadesPublico] = useState([]);
+  const [unidadeId, setUnidadeId] = useState("");
 
   // Parsear query da URL (dentro do hash)
   const extrairSlugDaURL = () => {
@@ -95,6 +97,9 @@ export default function PreMatricula() {
         }
         
         setTenantId(tenantPub.id);
+        listarUnidadesPublico(tenantPub.id)
+          .then((lista) => setUnidadesPublico(lista || []))
+          .catch(() => setUnidadesPublico([]));
         const temaMontado = montarTema(tenantPub);
         setTema(temaMontado);
         
@@ -144,6 +149,7 @@ export default function PreMatricula() {
       await criarPreMatricula({
         tenantId: tenantId || import.meta.env.VITE_TENANT_ID,
         cursoId: cursoId || null,
+          unidadeId: unidadesPublico.length === 1 ? unidadesPublico[0].id : (unidadeId || null),
         origem: "site",
         nome,
         email: normalizedEmail,
@@ -316,6 +322,29 @@ export default function PreMatricula() {
                 ))}
               </select>
             </div>
+            {unidadesPublico.length >= 2 && (
+              <div style={{ marginTop: 16 }}>
+                <label style={{ display: "block", fontSize: 12, fontWeight: 600,
+                  color: tema.muted, marginBottom: 4 }}>
+                  Unidade / Polo
+                </label>
+                <select
+                  value={unidadeId}
+                  onChange={(e) => setUnidadeId(e.target.value)}
+                  style={{
+                    width: "100%", padding: "10px 14px", borderRadius: 10,
+                    border: `1.5px solid ${tema.line}`, fontSize: 14, fontFamily: FONT,
+                    outline: "none", boxSizing: "border-box", color: tema.ink,
+                    background: "#fff",
+                  }}
+                >
+                  <option value="">Qualquer unidade</option>
+                  {unidadesPublico.map((u) => (
+                    <option key={u.id} value={u.id}>{u.nome}</option>
+                  ))}
+                </select>
+              </div>
+            )}
             {erro && (
               <div style={{ marginTop: 12, fontSize: 13, color: tema.danger,
                 background: "#fdf0ef", borderRadius: 8, padding: "8px 12px" }}>

@@ -73,10 +73,11 @@ export async function concluirAula(usuarioId, tenantId, aulaId) {
 
 /* ---------------- PRE-MATRICULA PUBLICA ---------------- */
 
-export async function criarPreMatricula({ tenantId, cursoId, nome, email, telefone, origem = "site" }) {
+export async function criarPreMatricula({ tenantId, cursoId, nome, email, telefone, origem = "site", unidadeId = null }) {
   const { error } = await supabase.from("leads").insert({
     tenant_id: tenantId,
     curso_id: cursoId ?? null,
+    unidade_id: unidadeId ?? null,
     nome,
     email,
     telefone,
@@ -114,22 +115,26 @@ export async function listarCursos() {
   return data ?? [];
 }
 
-export async function listarLeads() {
-  const { data, error } = await supabase
+export async function listarLeads(unidadeId) {
+  let query = supabase
     .from("leads")
-    .select("id, nome, email, telefone, origem, situacao, created_at, curso:cursos(nome)")
+    .select("id, nome, email, telefone, origem, situacao, created_at, unidade_id, curso:cursos(nome), unidade:unidades(id, nome)")
     .order("created_at", { ascending: false })
     .limit(50);
+  if (unidadeId) query = query.eq("unidade_id", unidadeId);
+  const { data, error } = await query;
   if (error) throw error;
   return data ?? [];
 }
 
-export async function listarMatriculas() {
-  const { data, error } = await supabase
+export async function listarMatriculas(unidadeId) {
+  let query = supabase
     .from("matriculas")
-    .select("id, situacao, data_matricula, created_at, aluno:usuarios(id, nome, email, telefone), curso:cursos(id, nome)")
+    .select("id, situacao, data_matricula, created_at, unidade_id, aluno:usuarios(id, nome, email, telefone), curso:cursos(id, nome), unidade:unidades(id, nome)")
     .order("created_at", { ascending: false })
     .limit(200);
+  if (unidadeId) query = query.eq("unidade_id", unidadeId);
+  const { data, error } = await query;
   if (error) throw error;
   return data ?? [];
 }
@@ -180,6 +185,7 @@ export async function converterLead(lead, tenantId, cursoId, turmaId = null) {
     usuario_id: novoAluno.id,
     curso_id: lead?.curso_id ?? cursoId,
     turma_id: turmaId,
+    unidade_id: lead?.unidade_id ?? null,
     origem: "self_service",
   });
   if (e2) throw e2;
@@ -221,4 +227,35 @@ export async function salvarConfigTenant({ nome, logo_url, config }) {
     })
     .eq("id", atual.id);
   if (error) throw error;
+}
+
+
+/* ---------------- UNIDADES / POLOS ---------------- */
+
+export async function listarUnidades() {
+  const { data, error } = await supabase
+    .from("unidades")
+    .select("id, nome, cidade, estado, pais, ativo")
+    .order("nome");
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function criarUnidade({ nome, cidade, estado, pais = "BR" }) {
+  const perfil = await meuPerfil();
+  const { error } = await supabase.from("unidades").insert({
+    tenant_id: perfil.tenant_id, nome, cidade, estado, pais,
+  });
+  if (error) throw error;
+}
+
+export async function alternarUnidade(unidadeId, ativo) {
+  const { error } = await supabase.from("unidades").update({ ativo }).eq("id", unidadeId);
+  if (error) throw error;
+}
+
+export async function listarUnidadesPublico(tenantId) {
+  const { data, error } = await supabase.rpc("listar_unidades_publico", { p_tenant_id: tenantId });
+  if (error) throw error;
+  return data ?? [];
 }

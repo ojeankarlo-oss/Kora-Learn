@@ -8,7 +8,7 @@ import {
   Home, PlayCircle, BookOpen, Bell, ChevronRight, CheckCircle2, Lock,
   Flame, Trophy, Star, Users, AlertTriangle, LogOut, GraduationCap,
   FileText, Clock, TrendingUp, Loader2, Inbox, UserPlus, RefreshCw,
-  Eye, EyeOff
+  Eye, EyeOff, MapPin, Building2
 } from "lucide-react";
 import { supabase } from "./lib/supabaseClient";
 import { TEMA_PADRAO, montarTema } from "./theme";
@@ -17,7 +17,8 @@ import PrimeiroAcesso from "./PrimeiroAcesso";
 import {
   entrarComEmail, sair, meuPerfil, meusCursos, concluirAula,
   kpisDoTenant, listarLeads, listarCursos, converterLead,
-  listarMatriculas, atualizarSituacaoMatricula, meuTenant, salvarConfigTenant
+  listarMatriculas, atualizarSituacaoMatricula, meuTenant, salvarConfigTenant,
+  listarUnidades, criarUnidade, alternarUnidade, listarUnidadesPublico
 } from "./lib/api";
 
 /* ---------- Contexto de tema (white-label) ---------- */
@@ -701,6 +702,15 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
   const [matriculasLoading, setMatriculasLoading] = useState(false);
   const [matriculasError, setMatriculasError] = useState("");
   const [buscaAluno, setBuscaAluno] = useState("");
+  const [unidades, setUnidades] = useState([]);
+  const [unidadesLoading, setUnidadesLoading] = useState(false);
+  const [unidadesError, setUnidadesError] = useState("");
+  const [unidadeFiltro, setUnidadeFiltro] = useState("");
+  const [novaUnidadeNome, setNovaUnidadeNome] = useState("");
+  const [novaUnidadeCidade, setNovaUnidadeCidade] = useState("");
+  const [novaUnidadeEstado, setNovaUnidadeEstado] = useState("");
+  const [novaUnidadePais, setNovaUnidadePais] = useState("BR");
+  const [criandoUnidade, setCriandoUnidade] = useState(false);
   
   // Configurações
   const [configNome, setConfigNome] = useState("");
@@ -713,7 +723,7 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
 
   const carregar = useCallback(async () => {
     try {
-      const [k, l, c] = await Promise.all([kpisDoTenant(), listarLeads(), listarCursos()]);
+      const [k, l, c] = await Promise.all([kpisDoTenant(), listarLeads(unidadeFiltro || undefined) /* TODO (fase futura): filtrar KPIs por unidade tambem */, listarCursos()]);
       setKpis(k); setLeads(l); setCursos(c);
     } catch (e) {
       console.error(e);
@@ -721,7 +731,7 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
       setKpis({ alunosAtivos: 0, matriculasHoje: 0, leadsNovosNoMes: 0 });
       setLeads([]);
     }
-  }, [toast]);
+  }, [toast, unidadeFiltro]);
 
   useEffect(() => { carregar(); }, [carregar]);
 
@@ -729,7 +739,7 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
     setMatriculasLoading(true);
     setMatriculasError("");
     try {
-      const data = await listarMatriculas();
+      const data = await listarMatriculas(unidadeFiltro || undefined);
       setMatriculas(data);
     } catch (e) {
       console.error(e);
@@ -738,9 +748,24 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
     } finally {
       setMatriculasLoading(false);
     }
-  }, []);
+  }, [unidadeFiltro]);
 
   useEffect(() => { carregarMatriculas(); }, [carregarMatriculas]);
+  const carregarUnidades = useCallback(async () => {
+    setUnidadesLoading(true);
+    setUnidadesError("");
+    try {
+      const data = await listarUnidades();
+      setUnidades(data);
+    } catch (e) {
+      console.error(e);
+      setUnidadesError("Não foi possível carregar as unidades.");
+      setUnidades([]);
+    } finally {
+      setUnidadesLoading(false);
+    }
+  }, []);
+  useEffect(() => { carregarUnidades(); }, [carregarUnidades]);
 
   // Carregar dados atuais de configuração quando a aba é ativada
   useEffect(() => {
@@ -780,6 +805,42 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
     } catch (e) {
       console.error(e);
       toast("Erro ao atualizar a matrícula");
+    }
+  };
+  const handleCriarUnidade = async (e) => {
+    e.preventDefault();
+    if (!novaUnidadeNome.trim()) { toast("Informe o nome da unidade"); return; }
+    setCriandoUnidade(true);
+    try {
+      await criarUnidade({
+        nome: novaUnidadeNome.trim(),
+        cidade: novaUnidadeCidade.trim(),
+        estado: novaUnidadeEstado.trim(),
+        pais: novaUnidadePais.trim() || "BR",
+      });
+      toast("Unidade criada ✓");
+      setNovaUnidadeNome(""); setNovaUnidadeCidade(""); setNovaUnidadeEstado(""); setNovaUnidadePais("BR");
+      carregarUnidades();
+    } catch (e) {
+      console.error(e);
+      toast("Erro ao criar unidade");
+    } finally {
+      setCriandoUnidade(false);
+    }
+  };
+  const handleAlternarUnidade = async (unidade) => {
+    const novoAtivo = !unidade.ativo;
+    const confirmar = window.confirm(
+      `${novoAtivo ? "Reativar" : "Desativar"} a unidade "${unidade.nome}"?`
+    );
+    if (!confirmar) return;
+    try {
+      await alternarUnidade(unidade.id, novoAtivo);
+      toast(`Unidade ${novoAtivo ? "reativada" : "desativada"} ✓`);
+      carregarUnidades();
+    } catch (e) {
+      console.error(e);
+      toast("Erro ao atualizar unidade");
     }
   };
 
@@ -885,7 +946,20 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
           </div>
         )}
 
-    <div style={{ marginTop: 24, display: "flex", gap: 8 }}>
+    <div style={{ marginTop: 20, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: T.muted }}>Unidade</label>
+            <select
+              value={unidadeFiltro}
+              onChange={(e) => setUnidadeFiltro(e.target.value)}
+              style={{ padding: "8px 12px", borderRadius: 10, border: "1px solid " + T.line, fontSize: 13 }}
+            >
+              <option value="">Todas as unidades</option>
+              {unidades.map((u) => (
+                <option key={u.id} value={u.id}>{u.nome}</option>
+              ))}
+            </select>
+          </div>
+          <div style={{ marginTop: 24, display: "flex", gap: 8 }}>
       <button onClick={() => setActiveTab("leads")} style={{ background: activeTab === "leads" ? T.forest : "none", color: activeTab === "leads" ? "#fff" : T.muted, border: activeTab === "leads" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
         Leads
       </button>
@@ -894,7 +968,10 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
           Alunos
         </button>
       )}
-      <button onClick={() => setActiveTab("configuracoes")} style={{ background: activeTab === "configuracoes" ? T.forest : "none", color: activeTab === "configuracoes" ? "#fff" : T.muted, border: activeTab === "configuracoes" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
+      <button onClick={() => setActiveTab("unidades")} style={{ background: activeTab === "unidades" ? T.forest : "none", color: activeTab === "unidades" ? " #fff" : T.muted, border: activeTab === "unidades" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
+            Unidades
+          </button>
+          <button onClick={() => setActiveTab("configuracoes")} style={{ background: activeTab === "configuracoes" ? T.forest : "none", color: activeTab === "configuracoes" ? "#fff" : T.muted, border: activeTab === "configuracoes" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
         Configurações
       </button>
     </div>
@@ -921,7 +998,7 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
                 <div>
                   <div style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{l.nome}</div>
                   <div style={{ fontSize: 12, color: T.muted }}>
-                    {l.email}{l.curso?.nome ? ` · interesse: ${l.curso.nome}` : ""} · {l.origem}
+                    {l.email}{l.curso?.nome ? ` · interesse: ${l.curso.nome}` : ""} · {l.origem}{l.unidade?.nome ? ` · ${l.unidade.nome}` : ""}
                   </div>
                 </div>
                 {l.situacao === "convertido" ? (
@@ -973,7 +1050,7 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
                 <div>
                   <div style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{m.aluno?.nome ?? "Aluno"}</div>
                   <div style={{ fontSize: 12, color: T.muted }}>
-                    {m.aluno?.email}{m.curso?.nome ? " · " + m.curso.nome : ""}
+                    {m.aluno?.email}{m.curso?.nome ? " · " + m.curso.nome : ""}{m.unidade?.nome ? " · " + m.unidade.nome : ""}
                   </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -997,7 +1074,75 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
         )}
       </>
     )}
-    {activeTab === "configuracoes" && (
+    {activeTab === "unidades" && (
+            <>
+              <div style={{ marginTop: 24, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <Eyebrow>Unidades / Polos</Eyebrow>
+                <button onClick={carregarUnidades} style={{ background: "none", border: "none", color: T.forest, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}>
+                  <RefreshCw size={12} /> Atualizar
+                </button>
+              </div>
+              {unidadesLoading ? <Spinner label="Carregando unidades…" /> : unidadesError ? (
+                <Card style={{ marginTop: 8, padding: 24, textAlign: "center" }}>
+                  <AlertTriangle size={26} color={T.danger} />
+                  <div style={{ fontSize: 13, color: T.muted, marginTop: 6 }}>{unidadesError}</div>
+                </Card>
+              ) : unidades.length === 0 ? (
+                <Card style={{ marginTop: 8, padding: 24, textAlign: "center" }}>
+                  <MapPin size={26} color={T.muted} />
+                  <div style={{ fontSize: 13, color: T.muted, marginTop: 6 }}>
+                    Nenhuma unidade cadastrada ainda.
+                  </div>
+                </Card>
+              ) : (
+                <Card style={{ marginTop: 8, overflow: "hidden" }}>
+                  {unidades.map((u, i) => (
+                    <div key={u.id} style={{ padding: "12px 14px", borderTop: i ? "1px solid " + T.line : "none", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{u.nome}</div>
+                        <div style={{ fontSize: 12, color: T.muted }}>
+                          {[u.cidade, u.estado].filter(Boolean).join("/")}{u.pais ? ` · ${u.pais}` : ""}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 999, background: u.ativo ? " #EAF6F0" : " #FBEAEA", color: u.ativo ? T.success : T.danger }}>
+                          {u.ativo ? "Ativa" : "Inativa"}
+                        </span>
+                        <button onClick={() => handleAlternarUnidade(u)} style={{ background: u.ativo ? T.danger : T.forest, color: " #fff", border: "none", borderRadius: 10, padding: "8px 12px", fontSize: 12, fontWeight: 700 }}>
+                          {u.ativo ? "Desativar" : "Reativar"}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </Card>
+              )}
+              <Eyebrow style={{ marginTop: 24 }}>Adicionar unidade</Eyebrow>
+              <Card style={{ marginTop: 8, padding: 20 }}>
+                <form onSubmit={handleCriarUnidade}>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 4 }}>Nome *</label>
+                  <input value={novaUnidadeNome} onChange={(e) => setNovaUnidadeNome(e.target.value)} placeholder="Ex.: Unidade Centro" style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid " + T.line, fontSize: 13, boxSizing: "border-box", marginBottom: 12 }} />
+                  <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 8 }}>
+                    <div>
+                      <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 4 }}>Cidade</label>
+                      <input value={novaUnidadeCidade} onChange={(e) => setNovaUnidadeCidade(e.target.value)} placeholder="Cidade" style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid " + T.line, fontSize: 13, boxSizing: "border-box" }} />
+                    </div>
+                    <div>
+                      <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 4 }}>Estado (UF)</label>
+                      <input value={novaUnidadeEstado} onChange={(e) => setNovaUnidadeEstado(e.target.value)} placeholder="UF" maxLength={2} style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid " + T.line, fontSize: 13, boxSizing: "border-box", textTransform: "uppercase" }} />
+                    </div>
+                    <div>
+                      <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 4 }}>País</label>
+                      <input value={novaUnidadePais} onChange={(e) => setNovaUnidadePais(e.target.value)} placeholder="BR" style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1px solid " + T.line, fontSize: 13, boxSizing: "border-box" }} />
+                    </div>
+                  </div>
+                  <button type="submit" disabled={criandoUnidade} style={{ marginTop: 14, background: T.forest, color: " #fff", border: "none", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 700, opacity: criandoUnidade ? 0.7 : 1 }}>
+                    {criandoUnidade ? "Adicionando…" : "Adicionar unidade"}
+                  </button>
+                </form>
+              </Card>
+            </>
+          )}
+          {activeTab === "configuracoes" && (
       <>
         <Eyebrow style={{ marginTop: 24 }}>Configurações da instituição</Eyebrow>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 12 }}>
