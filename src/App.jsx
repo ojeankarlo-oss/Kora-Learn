@@ -346,6 +346,7 @@ function RedefinirSenhaScreen({ onLogged }) {
   const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(false);
   const [recoveryReady, setRecoveryReady] = useState(false);
+  const [linkErro, setLinkErro] = useState(false);
 
   useEffect(() => {
     let ativo = true;
@@ -376,6 +377,7 @@ function RedefinirSenhaScreen({ onLogged }) {
     event.preventDefault();
     setErro("");
     setInfo("");
+    setLinkErro(false);
 
     if (senha.length < 8) {
       setErro("A senha deve ter pelo menos 8 caracteres.");
@@ -392,8 +394,10 @@ function RedefinirSenhaScreen({ onLogged }) {
       const { error } = await supabase.auth.updateUser({ password: senha });
       if (error) {
         const msg = error.message?.toLowerCase() || "";
-        if (msg.includes("expired") || msg.includes("invalid") || msg.includes("token")) {
+        const isExpired = msg.includes("expired") || msg.includes("invalid") || msg.includes("token");
+        if (isExpired) {
           setErro("O link de recuperação expirou ou é inválido. Solicite um novo link e tente novamente.");
+          setLinkErro(true);
         } else {
           setErro("Não foi possível redefinir a senha. Solicite um novo link e tente novamente.");
         }
@@ -453,6 +457,13 @@ function RedefinirSenhaScreen({ onLogged }) {
             <div style={{ marginTop: 12, padding: 10, borderRadius: 12, background: "#FBEFEC", color: T.danger, fontSize: 13, fontWeight: 500 }}>
               {erro}
             </div>
+          )}
+
+          {linkErro && (
+            <button onClick={() => { window.location.hash = "#/recuperar-senha"; }}
+              style={{ width: "100%", marginTop: 10, padding: 12, borderRadius: 12, border: "none", background: T.forest, color: "#fff", fontWeight: 600, fontSize: 13 }}>
+              Pedir novo link
+            </button>
           )}
 
           {info && (
@@ -1163,9 +1174,14 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
    ============================================================ */
 export default function App() {
   // --- Roteamento por hash (sem biblioteca) ---
-  const [rota, setRota] = React.useState(window.location.hash);
+  const getRouteFromHash = (hash = window.location.hash) => {
+    if (hash.includes("type=recovery")) return "#/redefinir-senha";
+    return hash || "#/";
+  };
+
+  const [rota, setRota] = React.useState(getRouteFromHash());
   React.useEffect(() => {
-    const handler = () => setRota(window.location.hash);
+    const handler = () => setRota(getRouteFromHash(window.location.hash));
     window.addEventListener('hashchange', handler);
     return () => window.removeEventListener('hashchange', handler);
   }, []);
@@ -1217,7 +1233,10 @@ export default function App() {
       setChecking(false);
       if (session) carregarPerfil();
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((_ev, session) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "PASSWORD_RECOVERY") {
+        setRota("#/redefinir-senha");
+      }
       setLogged(!!session);
       if (session) carregarPerfil();
       else { setPerfil(null); setErroPerfil(""); }
