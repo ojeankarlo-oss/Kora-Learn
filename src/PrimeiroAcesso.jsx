@@ -62,6 +62,10 @@ export default function PrimeiroAcesso({ onLogged }) {
   const [loading, setLoading] = useState(false);
 
   const senhaValida = useMemo(() => senha.length >= 8, [senha]);
+  const reqTamanho = senha.length >= 8;
+  const reqIguais = confirmarSenha.length > 0 && senha === confirmarSenha;
+  const senhasDivergem = confirmarSenha.length > 0 && senha !== confirmarSenha;
+  const requisitosOk = reqTamanho && reqIguais;
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -136,10 +140,26 @@ export default function PrimeiroAcesso({ onLogged }) {
             autoComplete="new-password"
           />
 
+          <div style={{ margin: "4px 0 12px", display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: reqTamanho ? "#2E7D32" : T.muted }}>
+              <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 18, height: 18, borderRadius: "50%", border: reqTamanho ? "none" : "1.5px solid #C9CFCC", background: reqTamanho ? "#2E7D32" : "transparent", color: "#fff", fontSize: 11, fontWeight: 700 }}>{reqTamanho ? "✓" : ""}</span>
+              Pelo menos 8 caracteres
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: reqIguais ? "#2E7D32" : T.muted }}>
+              <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 18, height: 18, borderRadius: "50%", border: reqIguais ? "none" : "1.5px solid #C9CFCC", background: reqIguais ? "#2E7D32" : "transparent", color: "#fff", fontSize: 11, fontWeight: 700 }}>{reqIguais ? "✓" : ""}</span>
+              As senhas são idênticas
+            </div>
+            {senhasDivergem && (
+              <div style={{ fontSize: 13, color: "#B93B2D", fontWeight: 500 }}>
+                As senhas não coincidem
+              </div>
+            )}
+          </div>
+
           {erro && <div style={{ marginBottom: 10, padding: "8px 10px", borderRadius: 8, background: "#FCECEA", color: "#B93B2D", fontSize: 13 }}>{erro}</div>}
           {info && <div style={{ marginBottom: 10, padding: "8px 10px", borderRadius: 8, background: "#EAF6F0", color: T.forest, fontSize: 13 }}>{info}</div>}
 
-          <button type="submit" disabled={loading} style={{ width: "100%", padding: "12px 14px", borderRadius: 12, border: "none", background: loading ? T.muted : T.forest, color: "#fff", fontWeight: 700, fontSize: 14 }}>
+          <button type="submit" disabled={loading || !requisitosOk} style={{ width: "100%", padding: "12px 14px", borderRadius: 12, border: "none", background: loading || !requisitosOk ? T.muted : T.forest, color: "#fff", fontWeight: 700, fontSize: 14, cursor: loading || !requisitosOk ? "not-allowed" : "pointer" }}>
             {loading ? "Criando conta..." : "Criar senha"}
           </button>
         </form>

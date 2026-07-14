@@ -356,13 +356,26 @@ function RedefinirSenhaScreen({ onLogged }) {
   const [recoveryReady, setRecoveryReady] = useState(false);
   const [linkErro, setLinkErro] = useState(false);
 
+  const reqTamanho = senha.length >= 8;
+  const reqIguais = confirmarSenha.length > 0 && senha === confirmarSenha;
+  const senhasDivergem = confirmarSenha.length > 0 && senha !== confirmarSenha;
+  const requisitosOk = reqTamanho && reqIguais;
+
   useEffect(() => {
     let ativo = true;
+    let jaValidado = false;
+
+    const marcarValidado = () => {
+      if (!ativo || jaValidado) return;
+      jaValidado = true;
+      setRecoveryReady(true);
+      setLinkErro(false);
+    };
 
     const validarSessao = async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      if (ativo) {
-        setRecoveryReady(!!session);
+      if (ativo && session) {
+        marcarValidado();
       }
     };
 
@@ -371,12 +384,19 @@ function RedefinirSenhaScreen({ onLogged }) {
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       if (!ativo) return;
       if (event === "PASSWORD_RECOVERY" || session) {
-        setRecoveryReady(true);
+        marcarValidado();
       }
     });
 
+    const timeoutId = setTimeout(() => {
+      if (ativo && !jaValidado) {
+        setLinkErro(true);
+      }
+    }, 5000);
+
     return () => {
       ativo = false;
+      clearTimeout(timeoutId);
       sub.subscription.unsubscribe();
     };
   }, []);
@@ -438,9 +458,21 @@ function RedefinirSenhaScreen({ onLogged }) {
           </div>
         </div>
 
-        {!recoveryReady && (
+        {!recoveryReady && !linkErro && (
           <div style={{ marginBottom: 12, padding: 10, borderRadius: 12, background: "#F2F6F4", color: T.muted, fontSize: 13 }}>
             Validando o link de recuperação...
+          </div>
+        )}
+
+        {linkErro && !recoveryReady && (
+          <div style={{ marginBottom: 12, padding: 14, borderRadius: 12, background: "#FBEFEC", color: T.danger, fontSize: 13, fontWeight: 500 }}>
+            Link inválido ou expirado.
+            <button
+              onClick={() => { window.location.hash = "#/recuperar-senha"; }}
+              style={{ display: "block", width: "100%", marginTop: 12, padding: 12, border: "none", borderRadius: 12, background: T.forest, color: "#fff", fontWeight: 600, fontSize: 13, cursor: "pointer" }}
+            >
+              Pedir novo link
+            </button>
           </div>
         )}
 
@@ -461,6 +493,22 @@ function RedefinirSenhaScreen({ onLogged }) {
             autoComplete="new-password"
           />
 
+          <div style={{ margin: "4px 0 12px", display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: reqTamanho ? "#2E7D32" : T.muted }}>
+              <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 18, height: 18, borderRadius: "50%", border: reqTamanho ? "none" : "1.5px solid #C9CFCC", background: reqTamanho ? "#2E7D32" : "transparent", color: "#fff", fontSize: 11, fontWeight: 700 }}>{reqTamanho ? "✓" : ""}</span>
+              Pelo menos 8 caracteres
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: reqIguais ? "#2E7D32" : T.muted }}>
+              <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 18, height: 18, borderRadius: "50%", border: reqIguais ? "none" : "1.5px solid #C9CFCC", background: reqIguais ? "#2E7D32" : "transparent", color: "#fff", fontSize: 11, fontWeight: 700 }}>{reqIguais ? "✓" : ""}</span>
+              As senhas são idênticas
+            </div>
+            {senhasDivergem && (
+              <div style={{ fontSize: 13, color: T.danger, fontWeight: 500 }}>
+                As senhas não coincidem
+              </div>
+            )}
+          </div>
+
           {erro && (
             <div style={{ marginTop: 12, padding: 10, borderRadius: 12, background: "#FBEFEC", color: T.danger, fontSize: 13, fontWeight: 500 }}>
               {erro}
@@ -480,7 +528,7 @@ function RedefinirSenhaScreen({ onLogged }) {
             </div>
           )}
 
-          <button type="submit" disabled={loading || !recoveryReady} style={{ width: "100%", marginTop: 16, padding: 13, borderRadius: 12, border: "none", background: loading || !recoveryReady ? "#9DB5AC" : T.forest, color: "#fff", fontWeight: 600, fontSize: 14 }}>
+          <button type="submit" disabled={loading || !recoveryReady || !requisitosOk} style={{ width: "100%", marginTop: 16, padding: 13, borderRadius: 12, border: "none", background: loading || !recoveryReady || !requisitosOk ? "#9DB5AC" : T.forest, color: "#fff", fontWeight: 600, fontSize: 14, cursor: loading || !recoveryReady || !requisitosOk ? "not-allowed" : "pointer" }}>
             {loading ? "Salvando…" : "Redefinir senha"}
           </button>
         </form>
