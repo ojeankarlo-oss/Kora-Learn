@@ -14,11 +14,18 @@ import { supabase } from "./lib/supabaseClient";
 import { TEMA_PADRAO, montarTema } from "./theme";
 import PreMatricula from "./PreMatricula";
 import PrimeiroAcesso from "./PrimeiroAcesso";
+import AceiteScreen, { LGPD_VERSAO } from "./AceiteScreen";
+import MeusDocumentos from "./MeusDocumentos";
+import DocumentosAlunoModal from "./GestorDocumentos";
+import ContratoConfig from "./ContratoConfig";
+import { CONTRATO_PADRAO_VERSAO } from "./contratoPadrao";
 import {
   entrarComEmail, sair, meuPerfil, meusCursos, concluirAula,
   kpisDoTenant, listarLeads, listarCursos, converterLead,
   listarMatriculas, atualizarSituacaoMatricula, meuTenant, salvarConfigTenant,
-  listarUnidades, criarUnidade, alternarUnidade, listarUnidadesPublico
+  listarUnidades, criarUnidade, alternarUnidade, listarUnidadesPublico,
+  contratoAtivo, meusAceites, registrarAceite, salvarContrato,
+  enviarDocumento, meusDocumentos, documentosDoTenant, avaliarDocumento, urlDocumento,
 } from "./lib/api";
 
 /* ---------- Contexto de tema (white-label) ---------- */
@@ -490,9 +497,12 @@ function RedefinirSenhaScreen({ onLogged }) {
    ALUNO
    ============================================================ */
 function AlunoApp({ perfil, onLogout, toast }) {
+  const T = useTema();
   const [tab, setTab] = useState("home");
   const [cursos, setCursos] = useState(null); // null = carregando
   const [erro, setErro] = useState("");
+  const [aceiteStatus, setAceiteStatus] = useState("verificando"); // verificando | pendente | ok | erro
+  const [aceiteTentativa, setAceiteTentativa] = useState(0);
 
   const carregar = useCallback(async () => {
     try {
@@ -523,6 +533,25 @@ function AlunoApp({ perfil, onLogout, toast }) {
 
   useEffect(() => { carregar(); }, [carregar]);
 
+  useEffect(() => {
+    let ativo = true;
+    (async () => {
+      setAceiteStatus("verificando");
+      try {
+        const [aceites, contrato] = await Promise.all([meusAceites(), contratoAtivo()]);
+        if (!ativo) return;
+        const versaoContratoVigente = String(contrato?.versao || CONTRATO_PADRAO_VERSAO);
+        const temLgpd = aceites.some((a) => a.tipo === "lgpd" && a.versao === LGPD_VERSAO);
+        const temContrato = aceites.some((a) => a.tipo === "contrato" && a.versao === versaoContratoVigente);
+        setAceiteStatus(temLgpd && temContrato ? "ok" : "pendente");
+      } catch (e) {
+        console.error(e);
+        if (ativo) setAceiteStatus("erro");
+      }
+    })();
+    return () => { ativo = false; };
+  }, [perfil.id, aceiteTentativa]);
+
   const concluir = async (cursoId, aulaId) => {
     try {
       await concluirAula(perfil.id, perfil.tenant_id, aulaId);
@@ -537,6 +566,42 @@ function AlunoApp({ perfil, onLogout, toast }) {
   };
 
   const curso = cursos?.[0];
+
+  if (aceiteStatus === "verificando" || cursos === null) {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, color: T.muted, fontSize: 13 }}>
+          <RefreshCw className="kl-spin" size={16} /> Carregando seu portal...
+        </div>
+      </div>
+    );
+  }
+
+  if (aceiteStatus === "erro") {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, padding: 24, textAlign: "center" }}>
+        <AlertTriangle size={28} color={T.danger} />
+        <div style={{ fontSize: 14, color: T.ink, maxWidth: 320 }}>
+          Não foi possível verificar seus termos de aceite. Verifique sua conexão e tente novamente.
+        </div>
+        <button onClick={() => setAceiteTentativa((t) => t + 1)} style={{ background: T.forest, color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontSize: 13, fontWeight: 700 }}>
+          Tentar novamente
+        </button>
+      </div>
+    );
+  }
+
+  if (aceiteStatus === "pendente") {
+    return (
+      <AceiteScreen
+        perfil={perfil}
+        curso={curso}
+        toast={toast}
+        T={T}
+        onAceito={() => setAceiteStatus("ok")}
+      />
+    );
+  }
 
   return (
     <>
@@ -667,12 +732,17 @@ function AlunoApp({ perfil, onLogout, toast }) {
         )}
       </div>
 
-      {/* Bottom nav */}
+      {tab === "documentos" && (
+          <MeusDocumentos perfil={perfil} toast={toast} T={T} />
+        )}
+
+        {/* Bottom nav */}
       {curso && (
         <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 40, background: "#fff", borderTop: `1px solid ${T.line}`, display: "flex", justifyContent: "space-around", padding: "8px 8px calc(8px + env(safe-area-inset-bottom))" }}>
           {[
             { id: "home", label: "Início", icon: Home },
             { id: "player", label: "Aulas", icon: PlayCircle },
+        ...(T.modulos?.documentos ? [{ id: "documentos", label: "Documentos", icon: FileText }] : []),
           ].map(({ id, label, icon: Icon }) => {
             const active = tab === id;
             return (
@@ -695,6 +765,8 @@ function AlunoApp({ perfil, onLogout, toast }) {
 function GestorApp({ perfil, onLogout, toast, setTema }) {
   const T = useTema();
   const [activeTab, setActiveTab] = useState("leads");
+  const [docAluno, setDocAluno] = useState(null);
+  const [docsPendentes, setDocsPendentes] = useState(0);
   const [kpis, setKpis] = useState(null);
   const [leads, setLeads] = useState(null);
   const [cursos, setCursos] = useState([]);
@@ -734,6 +806,19 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
   }, [toast, unidadeFiltro]);
 
   useEffect(() => { carregar(); }, [carregar]);
+
+  const atualizarDocsPendentes = useCallback(async () => {
+    try {
+      const lista = await documentosDoTenant();
+      setDocsPendentes(lista.filter((d) => d.situacao === "pendente").length);
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (T.modulos?.documentos) atualizarDocsPendentes();
+  }, [T.modulos?.documentos, atualizarDocsPendentes]);
 
   const carregarMatriculas = useCallback(async () => {
     setMatriculasLoading(true);
@@ -966,7 +1051,13 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
       {T.modulos?.alunos !== false && (
         <button onClick={() => setActiveTab("alunos")} style={{ background: activeTab === "alunos" ? T.forest : "none", color: activeTab === "alunos" ? "#fff" : T.muted, border: activeTab === "alunos" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
           Alunos
-        </button>
+        
+              {T.modulos?.documentos && docsPendentes > 0 && (
+                <span style={{ marginLeft: 6, background: T.danger, color: "#fff", borderRadius: 999, padding: "2px 7px", fontSize: 10, fontWeight: 700 }}>
+                  {docsPendentes} pendente{docsPendentes > 1 ? "s" : ""}
+                </span>
+              )}
+            </button>
       )}
       <button onClick={() => setActiveTab("unidades")} style={{ background: activeTab === "unidades" ? T.forest : "none", color: activeTab === "unidades" ? " #fff" : T.muted, border: activeTab === "unidades" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
             Unidades
@@ -1057,6 +1148,11 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
                   <span style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 999, ...badgeStyle(m.situacao) }}>
                     {m.situacao === "ativa" ? "Ativa" : m.situacao === "cancelada" ? "Cancelada" : m.situacao === "concluida" ? "Concluída" : m.situacao === "trancada" ? "Trancada" : m.situacao}
                   </span>
+              {T.modulos?.documentos && (
+                <button onClick={() => setDocAluno({ id: m.aluno?.id, nome: m.aluno?.nome })} style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: "1px solid " + T.line, color: T.ink, borderRadius: 10, padding: "6px 10px", fontSize: 12, fontWeight: 700 }}>
+                  <FileText size={13} /> Documentos
+                </button>
+              )}
                   {m.situacao === "ativa" && (
                     <button onClick={() => handleSituacaoMatricula(m, "cancelada")} style={{ background: T.danger, color: "#fff", border: "none", borderRadius: 10, padding: "8px 12px", fontSize: 12, fontWeight: 700 }}>
                       Cancelar matrícula
@@ -1144,6 +1240,7 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
           )}
           {activeTab === "configuracoes" && (
       <>
+        <ContratoConfig T={T} toast={toast} />
         <Eyebrow style={{ marginTop: 24 }}>Configurações da instituição</Eyebrow>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 12 }}>
           {/* Esquerda: Formulário */}
@@ -1227,7 +1324,7 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
               {/* Módulos */}
               <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${T.line}` }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: T.ink, marginBottom: 12 }}>Módulos</div>
-                {["inscricao_publica", "alunos"].map((modulo) => (
+                {["inscricao_publica", "alunos", "documentos"].map((modulo) => (
                   <label key={modulo} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, cursor: "pointer" }}>
                     <input
                       type="checkbox"
@@ -1236,11 +1333,11 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
                       style={{ cursor: "pointer" }}
                     />
                     <span style={{ fontSize: 13, color: T.ink }}>
-                      {modulo === "inscricao_publica" ? "Inscrição pública" : modulo === "alunos" ? "Alunos" : modulo}
+                      {modulo === "inscricao_publica" ? "Inscrição pública" : modulo === "alunos" ? "Alunos" : modulo === "documentos" ? "Documentos" : modulo}
                     </span>
                   </label>
                 ))}
-                {["financeiro", "documentos"].map((modulo) => (
+                {["financeiro"].map((modulo) => (
                   <label key={modulo} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, cursor: "pointer", opacity: 0.6 }}>
                     <input
                       type="checkbox"
@@ -1249,7 +1346,7 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
                       style={{ cursor: "not-allowed" }}
                     />
                     <span style={{ fontSize: 13, color: T.muted }}>
-                      {modulo === "financeiro" ? "Financeiro (em breve)" : "Documentos (em breve)"}
+                      "Financeiro (em breve)"
                     </span>
                   </label>
                 ))}
@@ -1310,7 +1407,10 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
       </>
     )}
       </div>
-    </div>
+    {docAluno && (
+    <DocumentosAlunoModal aluno={docAluno} toast={toast} T={T} onClose={() => setDocAluno(null)} onChange={atualizarDocsPendentes} />
+  )}
+  </div>
   );
 }
 

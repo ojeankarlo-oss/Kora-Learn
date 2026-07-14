@@ -38,7 +38,8 @@ export async function meusCursos(usuarioId) {
   const { data, error } = await supabase
     .from("matriculas")
     .select(`
-      id, situacao,
+      id, situacao, unidade_id,
+      unidade:unidades ( id, nome ),
       curso:cursos (
         id, nome, imagem_url,
         disciplinas (
@@ -258,4 +259,132 @@ export async function listarUnidadesPublico(tenantId) {
   const { data, error } = await supabase.rpc("listar_unidades_publico", { p_tenant_id: tenantId });
   if (error) throw error;
   return data ?? [];
+}
+
+/* ---------------- CONTRATO DE MATRICULA ---------------- */
+
+export async function contratoAtivo() {
+  const { data, error } = await supabase
+    .from("contratos")
+    .select("id, corpo_md, versao, ativo")
+    .eq("ativo", true)
+    .order("versao", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data ?? null;
+}
+
+export async function salvarContrato(corpo_md) {
+  const perfil = await meuPerfil();
+
+  const { data: atual } = await supabase
+    .from("contratos")
+    .select("versao")
+    .order("versao", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const novaVersao = (Number(atual?.versao) || 0) + 1;
+
+  const { error: errDesativar } = await supabase
+    .from("contratos")
+    .update({ ativo: false })
+    .eq("tenant_id", perfil.tenant_id)
+    .eq("ativo", true);
+  if (errDesativar) throw errDesativar;
+
+  const { error: errInserir } = await supabase.from("contratos").insert({
+    tenant_id: perfil.tenant_id,
+    corpo_md,
+    versao: novaVersao,
+    ativo: true,
+  });
+  if (errInserir) throw errInserir;
+}
+
+/* ---------------- ACEITES (CONTRATO / LGPD) ---------------- */
+
+export async function registrarAceite({ tipo, contratoId, versao, hash, matriculaId }) {
+  const perfil = await meuPerfil();
+  const { error } = await supabase.from("aceites").insert({
+    tenant_id: perfil.tenant_id,
+    usuario_id: perfil.id,
+    tipo,
+    contrato_id: contratoId ?? null,
+    matricula_id: matriculaId ?? null,
+    versao: String(versao),
+    hash_conteudo: hash,
+    user_agent: navigator.userAgent,
+  });
+  // Ignora erro de duplicidade (constraint unique de aceite ja registrado)
+  if (error && error.code !== "23505") throw error;
+}
+
+export async function meusAceites() {
+  const perfil = await meuPerfil();
+  const { data, error } = await supabase
+    .from("aceites")
+    .select("id, tipo, versao, contrato_id, aceito_em")
+    .eq("usuario_id", perfil.id)
+    .order("aceito_em", { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
+/* ---------------- DOCUMENTOS ---------------- */
+
+export async function enviarDocumento({ usuarioId, tenantId, matriculaId, tipo, file }) {
+  const path = `${tenantId}/${usuarioId}/${Date.now()}_${file.name}`;
+  const { error: errUpload } = await supabase.storage
+    .from("documentos")
+    .upload(path, file, { upsert: false });
+  if (errUpload) throw errUpload;
+
+  const { error } = await supabase.from("documentos").insert({
+    tenant_id: tenantId,
+    usuario_id: usuarioId,
+    matricula_id: matriculaId ?? null,
+    tipo,
+    nome_arquivo: file.name,
+    storage_path: path,
+    situacao: "pendente",
+    motivo: null,
+  });
+  if (error) throw error;
+}
+
+export async function meusDocumentos(usuarioId) {
+  const { data, error } = await supabase
+    .from("documentos")
+    .select("id, tipo, nome_arquivo, storage_path, situacao, motivo, created_at")
+    .eq("usuario_id", usuarioId)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function documentosDoTenant() {
+  const { data, error } = await supabase
+    .from("documentos")
+    .select("id, tipo, nome_arquivo, storage_path, situacao, motivo, created_at, usuario:usuarios(id, nome, email)")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  const ordem = { pendente: 0, reprovado: 1, aprovado: 2 };
+  return (data ?? []).slice().sort((a, b) => (ordem[a.situacao] ?? 9) - (ordem[b.situacao] ?? 9));
+}
+
+export async function avaliarDocumento(id, situacao, motivo) {
+  const { error } = await supabase
+    .from("documentos")
+    .update({ situacao, motivo: motivo ?? null })
+    .eq("id", id);
+  if (error) throw error;
+}
+
+export async function urlDocumento(storage_path) {
+  const { data, error } = await supabase.storage
+    .from("documentos")
+    .createSignedUrl(storage_path, 300);
+  if (error) throw error;
+  return data.signedUrl;
 }
