@@ -8,7 +8,7 @@ import {
   Home, PlayCircle, BookOpen, Bell, ChevronRight, CheckCircle2, Lock,
   Flame, Trophy, Star, Users, AlertTriangle, LogOut, GraduationCap,
   FileText, Clock, TrendingUp, Loader2, Inbox, UserPlus, RefreshCw,
-  Eye, EyeOff, MapPin, Building2
+  Eye, EyeOff, MapPin, Building2, Wallet
 } from "lucide-react";
 import { supabase } from "./lib/supabaseClient";
 import { TEMA_PADRAO, montarTema } from "./theme";
@@ -16,6 +16,8 @@ import PreMatricula from "./PreMatricula";
 import PrimeiroAcesso from "./PrimeiroAcesso";
 import AceiteScreen, { LGPD_VERSAO } from "./AceiteScreen";
 import MeusDocumentos from "./MeusDocumentos";
+import Financeiro from "./Financeiro";
+import FinanceiroGestor from "./FinanceiroGestor";
 import DocumentosAlunoModal from "./GestorDocumentos";
 import ContratoConfig from "./ContratoConfig";
 import { CONTRATO_PADRAO_VERSAO } from "./contratoPadrao";
@@ -784,6 +786,10 @@ function AlunoApp({ perfil, onLogout, toast }) {
           <MeusDocumentos perfil={perfil} toast={toast} T={T} />
         )}
 
+        {tab === "financeiro" && (
+          <Financeiro perfil={perfil} T={T} />
+        )}
+
         {/* Bottom nav */}
       {curso && (
         <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 40, background: "#fff", borderTop: `1px solid ${T.line}`, display: "flex", justifyContent: "space-around", padding: "8px 8px calc(8px + env(safe-area-inset-bottom))" }}>
@@ -791,6 +797,7 @@ function AlunoApp({ perfil, onLogout, toast }) {
             { id: "home", label: "Início", icon: Home },
             { id: "player", label: "Aulas", icon: PlayCircle },
         ...(T.modulos?.documentos ? [{ id: "documentos", label: "Documentos", icon: FileText }] : []),
+              ...(T.modulos?.financeiro ? [{ id: "financeiro", label: "Financeiro", icon: Wallet }] : []),
           ].map(({ id, label, icon: Icon }) => {
             const active = tab === id;
             return (
@@ -1113,6 +1120,11 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
           <button onClick={() => setActiveTab("configuracoes")} style={{ background: activeTab === "configuracoes" ? T.forest : "none", color: activeTab === "configuracoes" ? "#fff" : T.muted, border: activeTab === "configuracoes" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
         Configurações
       </button>
+      {T.modulos?.financeiro && (
+        <button onClick={() => setActiveTab("financeiro")} style={{ background: activeTab === "financeiro" ? T.forest : "none", color: activeTab === "financeiro" ? "#fff" : T.muted, border: activeTab === "financeiro" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
+          Financeiro
+        </button>
+      )}
     </div>
     {activeTab === "leads" && (
       <>
@@ -1455,6 +1467,9 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
       </>
     )}
       </div>
+    {activeTab === "financeiro" && T.modulos?.financeiro && (
+      <FinanceiroGestor perfil={perfil} toast={toast} T={T} />
+    )}
     {docAluno && (
     <DocumentosAlunoModal aluno={docAluno} toast={toast} T={T} onClose={() => setDocAluno(null)} onChange={atualizarDocsPendentes} />
   )}

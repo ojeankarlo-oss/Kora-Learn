@@ -388,3 +388,141 @@ export async function urlDocumento(storage_path) {
   if (error) throw error;
   return data.signedUrl;
 }
+
+/* ---------------- FINANCEIRO (titulos) ---------------- */
+
+// Titulos do aluno logado (RLS garante que retorna apenas os proprios).
+export async function meusTitulos() {
+  const { data, error } = await supabase
+    .from("titulos")
+    .select("id, descricao, valor_centavos, data_vencimento, data_pagamento, situacao, forma_pagamento, observacao")
+    .order("data_vencimento", { ascending: true });
+  if (error) throw error;
+  return data ?? [];
+}
+
+// Titulos do tenant (staff). RLS restringe ao tenant do usuario.
+export async function listarTitulos({ situacao, busca } = {}) {
+  let query = supabase
+    .from("titulos")
+    .select("id, descricao, valor_centavos, data_vencimento, data_pagamento, situacao, forma_pagamento, observacao, usuario_id, matricula_id, aluno:usuarios(id, nome, email)")
+    .order("data_vencimento", { ascending: true })
+    .limit(300);
+  if (situacao) query = query.eq("situacao", situacao);
+  const { data, error } = await query;
+  if (error) throw error;
+  let lista = data ?? [];
+  const termo = (busca ?? "").trim().toLowerCase();
+  if (termo) {
+    lista = lista.filter((t) => (t.aluno?.nome ?? "").toLowerCase().includes(termo));
+  }
+  return lista;
+}
+
+// Gera N titulos de mensalidade em um unico insert.
+export async function gerarMensalidades({ matriculaId, usuarioId, tenantId, cursoNome, valorCentavos, parcelas, diaVencimento, primeiraCompetencia }) {
+  const n = Number(parcelas) || 0;
+  const dia = Number(diaVencimento) || 1;
+  // primeiraCompetencia no formato "AAAA-MM" (input type="month").
+  const [anoBase, mesBase] = String(primeiraCompetencia).split("-").map((v) => parseInt(v, 10));
+  const registros = [];
+  for (let k = 0; k < n; k++) {
+    const d = new Date(anoBase, mesBase - 1 + k, 1);
+    const ano = d.getFullYear();
+    const mes = d.getMonth(); // 0-11
+    const ultimoDia = new Date(ano, mes + 1, 0).getDate();
+    const diaFinal = Math.min(dia, ultimoDia);
+    const venc = `${ano}-${String(mes + 1).padStart(2, "0")}-${String(diaFinal).padStart(2, "0")}`;
+    registros.push({
+      usuario_id: usuarioId,
+      tenant_id: tenantId,
+      matricula_id: matriculaId,
+      descricao: `Mensalidade ${k + 1}/${n} — ${cursoNome}`,
+      valor_centavos: valorCentavos,
+      data_vencimento: venc,
+      situacao: "aberto",
+    });
+  }
+  const { data, error } = await supabase.from("titulos").insert(registros).select();
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function criarTituloAvulso({ usuarioId, tenantId, matriculaId, descricao, valorCentavos, dataVencimento }) {
+  const { data, error } = await supabase
+    .from("titulos")
+    .insert([{
+      usuario_id: usuarioId,
+      tenant_id: tenantId,
+      matricula_id: matriculaId ?? null,
+      descricao,
+      valor_centavos: valorCentavos,
+      data_vencimento: dataVencimento,
+      situacao: "aberto",
+    }])
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+// Baixa manual: marca como pago com a data de hoje.
+export async function darBaixaTitulo(tituloId, formaPagamento) {
+  const hoje = new Date().toISOString().slice(0, 10);
+  const { data, error } = await supabase
+    .from("titulos")
+    .update({ situacao: "pago", data_pagamento: hoje, forma_pagamento: formaPagamento })
+    .eq("id", tituloId)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function cancelarTitulo(tituloId, observacao) {
+  const { data, error } = await supabase
+    .from("titulos")
+    .update({ situacao: "cancelado", observacao: observacao ?? null })
+    .eq("id", tituloId)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+// KPIs do mes corrente (somas em centavos + contagens). RLS restringe ao tenant.
+export async function kpisFinanceiro() {
+  const agora = new Date();
+  const ano = agora.getFullYear();
+  const mes = agora.getMonth();
+  const primeiroDiaMes = `${ano}-${String(mes + 1).padStart(2, "0")}-01`;
+  const ultimoDiaMes = `${ano}-${String(mes + 1).padStart(2, "0")}-${String(new Date(ano, mes + 1, 0).getDate()).padStart(2, "0")}`;
+  const hoje = agora.toISOString().slice(0, 10);
+
+  const { data, error } = await supabase
+    .from("titulos")
+    .select("valor_centavos, data_vencimento, data_pagamento, situacao");
+  if (error) throw error;
+  const lista = data ?? [];
+
+  const kpis = {
+    aReceberMes: { total: 0, qtd: 0 },
+    recebidoMes: { total: 0, qtd: 0 },
+    vencidos: { total: 0, qtd: 0 },
+  };
+  for (const t of lista) {
+    if (t.situacao === "aberto" && t.data_vencimento >= primeiroDiaMes && t.data_vencimento <= ultimoDiaMes) {
+      kpis.aReceberMes.total += t.valor_centavos || 0;
+      kpis.aReceberMes.qtd += 1;
+    }
+    if (t.situacao === "pago" && t.data_pagamento && t.data_pagamento >= primeiroDiaMes && t.data_pagamento <= ultimoDiaMes) {
+      kpis.recebidoMes.total += t.valor_centavos || 0;
+      kpis.recebidoMes.qtd += 1;
+    }
+    if (t.situacao === "aberto" && t.data_vencimento < hoje) {
+      kpis.vencidos.total += t.valor_centavos || 0;
+      kpis.vencidos.qtd += 1;
+    }
+  }
+  return kpis;
+}
