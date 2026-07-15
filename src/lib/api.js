@@ -405,7 +405,7 @@ export async function meusTitulos() {
 export async function listarTitulos({ situacao, busca } = {}) {
   let query = supabase
     .from("titulos")
-    .select("id, descricao, valor_centavos, data_vencimento, data_pagamento, situacao, forma_pagamento, observacao, usuario_id, matricula_id, aluno:usuarios(id, nome, email)")
+    .select("id, descricao, valor_centavos, data_vencimento, data_pagamento, situacao, forma_pagamento, observacao, usuario_id, matricula_id, aluno:usuarios!titulos_usuario_id_fkey(id, nome, email)")
     .order("data_vencimento", { ascending: true })
     .limit(300);
   if (situacao) query = query.eq("situacao", situacao);
