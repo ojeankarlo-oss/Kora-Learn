@@ -6,6 +6,28 @@ import { supabase } from "./supabaseClient";
 
 /* ---------------- AUTENTICACAO ---------------- */
 
+export async function cadastrarNovaConta(email, senha) {
+  const { data, error } = await supabase.auth.signUp({ email, password: senha });
+  if (error) throw error;
+  return data; // data.session pode vir nulo se o projeto exigir confirmação de e-mail
+}
+
+export async function meuStatusOnboarding() {
+  const { data, error } = await supabase.rpc("meu_status_onboarding");
+  if (error) throw error;
+  return data; // { tem_tenant, email }
+}
+
+export async function criarMinhaEscola({ nomeEscola, slug, nomeGestor }) {
+  const { data, error } = await supabase.rpc("criar_minha_escola", {
+    p_nome_escola: nomeEscola,
+    p_slug: slug,
+    p_nome_gestor: nomeGestor,
+  });
+  if (error) throw error; // error.message já vem em português (RAISE EXCEPTION da função)
+  return data; // { tenant_id, slug, usuario_id }
+}
+
 export async function entrarComEmail(email, senha) {
   const { data, error } = await supabase.auth.signInWithPassword({
     email,
