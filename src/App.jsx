@@ -290,8 +290,8 @@ function RecuperarSenhaScreen() {
 
     setLoading(true);
     try {
-      await supabase.auth.resetPasswordForEmail(emailFormatado, {
-        redirectTo: `${window.location.origin}/Kora-Learn/#/redefinir-senha`,
+            await supabase.auth.resetPasswordForEmail(emailFormatado, {
+        redirectTo: `${window.location.origin}/Kora-Learn/`,
       });
       setSucesso("Se este e-mail estiver cadastrado, enviamos um link de recuperação. Verifique também o spam.");
       setEmail("");
