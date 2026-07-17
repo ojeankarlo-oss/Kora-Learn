@@ -575,7 +575,10 @@ export async function alunosDaTurma(turmaId) {
     .eq("turma_id", turmaId)
     .eq("situacao", "ativa");
   if (error) throw error;
-  return (data ?? []).map((m) => m.usuario).filter(Boolean);
+  return (data ?? [])
+    .map((m) => m.usuario)
+    .filter(Boolean)
+    .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
 }
 
 // listaPresencas: [{ usuario_id, situacao }, ...]
