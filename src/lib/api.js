@@ -490,7 +490,7 @@ export async function listarTurmasAtivas() {
   const { data, error } = await supabase
     .from("turmas")
     .select("id, nome")
-    .eq("ativo", true)
+    .eq("ativa", true)
     .order("nome");
   if (error) throw error;
   return data ?? [];
@@ -534,7 +534,7 @@ export async function minhasTurmasParaChamada() {
     const { data, error } = await supabase
       .from("turmas")
       .select("id, nome, curso:cursos(id, nome, disciplinas(id, nome, ordem))")
-      .eq("ativo", true)
+      .eq("ativa", true)
       .order("nome");
     if (error) throw error;
     return montarTurmasComDisciplina(data);
