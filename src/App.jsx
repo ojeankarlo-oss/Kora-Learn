@@ -21,6 +21,9 @@ import MeusDocumentos from "./MeusDocumentos";
 import Financeiro from "./Financeiro";
 import FinanceiroGestor from "./FinanceiroGestor";
 import RH from "./RH";
+import VinculosProfessorTurma from "./VinculosProfessorTurma";
+import Chamada from "./Chamada";
+import FrequenciaAluno from "./FrequenciaAluno";
 import DocumentosAlunoModal from "./GestorDocumentos";
 import ContratoConfig from "./ContratoConfig";
 import { CONTRATO_PADRAO_VERSAO } from "./contratoPadrao";
@@ -743,8 +746,12 @@ function AlunoApp({ perfil, onLogout, toast }) {
                 </Card>
               );
             })}
+
+            <FrequenciaAluno T={T} />
           </div>
         )}
+
+        {!curso && cursos !== null && !erro && tab === "home" && <FrequenciaAluno T={T} />}
 
         {curso && tab === "player" && (
           <div className="kl-fade">
@@ -1124,6 +1131,9 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
       <button onClick={() => setActiveTab("unidades")} style={{ background: activeTab === "unidades" ? T.forest : "none", color: activeTab === "unidades" ? " #fff" : T.muted, border: activeTab === "unidades" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
             Unidades
           </button>
+          <button onClick={() => setActiveTab("chamada")} style={{ background: activeTab === "chamada" ? T.forest : "none", color: activeTab === "chamada" ? "#fff" : T.muted, border: activeTab === "chamada" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
+            Chamada
+          </button>
           <button onClick={() => setActiveTab("configuracoes")} style={{ background: activeTab === "configuracoes" ? T.forest : "none", color: activeTab === "configuracoes" ? "#fff" : T.muted, border: activeTab === "configuracoes" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
         Configurações
       </button>
@@ -1313,6 +1323,7 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
           {activeTab === "configuracoes" && (
       <>
         <ContratoConfig T={T} toast={toast} />
+        <VinculosProfessorTurma T={T} toast={toast} />
         <Eyebrow style={{ marginTop: 24 }}>Configurações da instituição</Eyebrow>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 12 }}>
           {/* Esquerda: Formulário */}
@@ -1484,6 +1495,9 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
     )}
     {activeTab === "rh" && T.modulos?.rh && (
       <RH perfil={perfil} toast={toast} T={T} />
+    )}
+    {activeTab === "chamada" && (
+      <Chamada perfil={perfil} toast={toast} T={T} />
     )}
     {docAluno && (
     <DocumentosAlunoModal aluno={docAluno} toast={toast} T={T} onClose={() => setDocAluno(null)} onChange={atualizarDocsPendentes} />

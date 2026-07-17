@@ -463,6 +463,186 @@ export async function reativarColaborador(id) {
   return data;
 }
 
+/* ---------------- TURMAS / PROFESSORES / CHAMADA / FREQUENCIA ---------------- */
+
+export async function listarVinculosProfessorTurma() {
+  const { data, error } = await supabase
+    .from("professores_turmas")
+    .select("id, usuario_id, turma_id, professor:usuarios(id, nome), turma:turmas(id, nome)")
+    .order("turma_id");
+  if (error) throw error;
+  return data ?? [];
+}
+
+// Usuarios com perfil 'professor', para o dropdown de vinculo.
+export async function listarProfessores() {
+  const { data, error } = await supabase
+    .from("usuarios")
+    .select("id, nome, email")
+    .eq("perfil", "professor")
+    .order("nome");
+  if (error) throw error;
+  return data ?? [];
+}
+
+// Turmas ativas do tenant, para o dropdown de vinculo.
+export async function listarTurmasAtivas() {
+  const { data, error } = await supabase
+    .from("turmas")
+    .select("id, nome")
+    .eq("ativo", true)
+    .order("nome");
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function vincularProfessorTurma(usuarioId, turmaId) {
+  const perfil = await meuPerfil();
+  const { error } = await supabase.from("professores_turmas").insert({
+    tenant_id: perfil.tenant_id,
+    usuario_id: usuarioId,
+    turma_id: turmaId,
+  });
+  if (error) throw error;
+}
+
+export async function desvincularProfessorTurma(vinculoId) {
+  const { error } = await supabase.from("professores_turmas").delete().eq("id", vinculoId);
+  if (error) throw error;
+}
+
+// Junta cada turma com a primeira disciplina do seu curso (MVP: 1 disciplina por turma).
+function montarTurmasComDisciplina(turmas) {
+  return (turmas ?? []).filter(Boolean).map((t) => {
+    const disciplinas = (t.curso?.disciplinas ?? []).slice().sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0));
+    return {
+      id: t.id,
+      nome: t.nome,
+      disciplinaId: disciplinas[0]?.id ?? null,
+      disciplinaNome: disciplinas[0]?.nome ?? "",
+    };
+  });
+}
+
+// Turmas as quais o usuario logado tem acesso para lancar presenca.
+// Gestor/super_admin: todas as turmas ativas do tenant. Demais perfis: so as vinculadas via professores_turmas.
+export async function minhasTurmasParaChamada() {
+  const perfil = await meuPerfil();
+  const souStaffGestor = perfil?.perfil === "gestor" || perfil?.perfil === "super_admin";
+
+  if (souStaffGestor) {
+    const { data, error } = await supabase
+      .from("turmas")
+      .select("id, nome, curso:cursos(id, nome, disciplinas(id, nome, ordem))")
+      .eq("ativo", true)
+      .order("nome");
+    if (error) throw error;
+    return montarTurmasComDisciplina(data);
+  }
+
+  const { data, error } = await supabase
+    .from("professores_turmas")
+    .select("turma:turmas(id, nome, curso:cursos(id, nome, disciplinas(id, nome, ordem)))")
+    .eq("usuario_id", perfil.id);
+  if (error) throw error;
+  return montarTurmasComDisciplina((data ?? []).map((v) => v.turma));
+}
+
+export async function criarRegistroAula({ turmaId, disciplinaId, dataAula, tipo, ambiente, observacao }) {
+  const perfil = await meuPerfil();
+  const { data, error } = await supabase
+    .from("registros_aula")
+    .insert({
+      tenant_id: perfil.tenant_id,
+      turma_id: turmaId,
+      disciplina_id: disciplinaId,
+      professor_id: perfil.id,
+      data_aula: dataAula,
+      tipo,
+      ambiente: ambiente || null,
+      observacao: observacao || null,
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function alunosDaTurma(turmaId) {
+  const { data, error } = await supabase
+    .from("matriculas")
+    .select("usuario:usuarios(id, nome)")
+    .eq("turma_id", turmaId)
+    .eq("situacao", "ativa");
+  if (error) throw error;
+  return (data ?? []).map((m) => m.usuario).filter(Boolean);
+}
+
+// listaPresencas: [{ usuario_id, situacao }, ...]
+export async function lancarPresencas(registroAulaId, listaPresencas) {
+  const perfil = await meuPerfil();
+  const registros = (listaPresencas ?? []).map((p) => ({
+    tenant_id: perfil.tenant_id,
+    registro_aula_id: registroAulaId,
+    usuario_id: p.usuario_id,
+    situacao: p.situacao,
+  }));
+  const { error } = await supabase
+    .from("presencas")
+    .upsert(registros, { onConflict: "registro_aula_id,usuario_id" });
+  if (error) throw error;
+}
+
+export async function historicoAulasTurma(turmaId) {
+  const { data, error } = await supabase
+    .from("registros_aula")
+    .select("id, data_aula, tipo, ambiente, observacao, presencas(situacao)")
+    .eq("turma_id", turmaId)
+    .order("data_aula", { ascending: false })
+    .limit(50);
+  if (error) throw error;
+  return data ?? [];
+}
+
+// Enriquece a frequencia_consolidada com nome de turma/disciplina (a view so tem os ids).
+async function enriquecerFrequencia(linhas) {
+  const turmaIds = [...new Set(linhas.map((l) => l.turma_id).filter(Boolean))];
+  const disciplinaIds = [...new Set(linhas.map((l) => l.disciplina_id).filter(Boolean))];
+
+  const [turmasRes, disciplinasRes] = await Promise.all([
+    turmaIds.length ? supabase.from("turmas").select("id, nome").in("id", turmaIds) : Promise.resolve({ data: [] }),
+    disciplinaIds.length ? supabase.from("disciplinas").select("id, nome").in("id", disciplinaIds) : Promise.resolve({ data: [] }),
+  ]);
+
+  const turmaPorId = Object.fromEntries((turmasRes.data ?? []).map((t) => [t.id, t.nome]));
+  const disciplinaPorId = Object.fromEntries((disciplinasRes.data ?? []).map((d) => [d.id, d.nome]));
+
+  return linhas.map((l) => ({
+    ...l,
+    turma_nome: turmaPorId[l.turma_id] ?? "Turma",
+    disciplina_nome: disciplinaPorId[l.disciplina_id] ?? "Disciplina",
+  }));
+}
+
+export async function minhaFrequencia() {
+  const perfil = await meuPerfil();
+  const { data, error } = await supabase
+    .from("frequencia_consolidada")
+    .select("*")
+    .eq("usuario_id", perfil.id);
+  if (error) throw error;
+  return enriquecerFrequencia(data ?? []);
+}
+
+export async function frequenciaDoAluno(usuarioId) {
+  const { data, error } = await supabase
+    .from("frequencia_consolidada")
+    .select("*")
+    .eq("usuario_id", usuarioId);
+  if (error) throw error;
+  return data ?? [];
+}
+
 /* ---------------- FINANCEIRO (titulos) ---------------- */
 
 // Titulos do aluno logado (RLS garante que retorna apenas os proprios).
