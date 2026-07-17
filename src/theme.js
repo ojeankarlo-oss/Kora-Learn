@@ -31,6 +31,7 @@ export const TEMA_PADRAO = {
     alunos: true,
     financeiro: false,
     documentos: false,
+    rh: false,
   },
 };
 

@@ -20,6 +20,7 @@ import AceiteScreen, { LGPD_VERSAO } from "./AceiteScreen";
 import MeusDocumentos from "./MeusDocumentos";
 import Financeiro from "./Financeiro";
 import FinanceiroGestor from "./FinanceiroGestor";
+import RH from "./RH";
 import DocumentosAlunoModal from "./GestorDocumentos";
 import ContratoConfig from "./ContratoConfig";
 import { CONTRATO_PADRAO_VERSAO } from "./contratoPadrao";
@@ -1131,6 +1132,11 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
           Financeiro
         </button>
       )}
+      {T.modulos?.rh && (
+        <button onClick={() => setActiveTab("rh")} style={{ background: activeTab === "rh" ? T.forest : "none", color: activeTab === "rh" ? "#fff" : T.muted, border: activeTab === "rh" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
+          RH
+        </button>
+      )}
     </div>
     {activeTab === "leads" && (
       <>
@@ -1475,6 +1481,9 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
       </div>
     {activeTab === "financeiro" && T.modulos?.financeiro && (
       <FinanceiroGestor perfil={perfil} toast={toast} T={T} />
+    )}
+    {activeTab === "rh" && T.modulos?.rh && (
+      <RH perfil={perfil} toast={toast} T={T} />
     )}
     {docAluno && (
     <DocumentosAlunoModal aluno={docAluno} toast={toast} T={T} onClose={() => setDocAluno(null)} onChange={atualizarDocsPendentes} />

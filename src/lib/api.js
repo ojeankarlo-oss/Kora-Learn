@@ -411,6 +411,58 @@ export async function urlDocumento(storage_path) {
   return data.signedUrl;
 }
 
+/* ---------------- RH (colaboradores) ---------------- */
+
+// Lista colaboradores. Se souPerfilGestor=true, inclui salario (tabela completa);
+// senao usa a view colaboradores_sem_salario, que nao possui a coluna salario_centavos.
+export async function listarColaboradores({ souPerfilGestor, unidadeId, busca } = {}) {
+  const tabela = souPerfilGestor ? "colaboradores" : "colaboradores_sem_salario";
+  let query = supabase
+    .from(tabela)
+    .select("*")
+    .order("nome", { ascending: true })
+    .limit(300);
+  if (unidadeId) query = query.eq("unidade_id", unidadeId);
+  if (busca) query = query.ilike("nome", `%${busca}%`);
+  const { data, error } = await query;
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function criarColaborador(dados) {
+  const { data, error } = await supabase.from("colaboradores").insert(dados).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function atualizarColaborador(id, dados) {
+  const { data, error } = await supabase.from("colaboradores").update(dados).eq("id", id).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function desligarColaborador(id, dataDesligamento) {
+  const { data, error } = await supabase
+    .from("colaboradores")
+    .update({ situacao: "desligado", data_desligamento: dataDesligamento })
+    .eq("id", id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function reativarColaborador(id) {
+  const { data, error } = await supabase
+    .from("colaboradores")
+    .update({ situacao: "ativo", data_desligamento: null })
+    .eq("id", id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
 /* ---------------- FINANCEIRO (titulos) ---------------- */
 
 // Titulos do aluno logado (RLS garante que retorna apenas os proprios).
