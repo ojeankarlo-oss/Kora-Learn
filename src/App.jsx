@@ -14,6 +14,8 @@ import { supabase } from "./lib/supabaseClient";
 import { TEMA_PADRAO, montarTema } from "./theme";
 import PreMatricula from "./PreMatricula";
 import PrimeiroAcesso from "./PrimeiroAcesso";
+import Cadastro from "./Cadastro";
+import CriarEscola from "./CriarEscola";
 import AceiteScreen, { LGPD_VERSAO } from "./AceiteScreen";
 import MeusDocumentos from "./MeusDocumentos";
 import Financeiro from "./Financeiro";
@@ -22,7 +24,7 @@ import DocumentosAlunoModal from "./GestorDocumentos";
 import ContratoConfig from "./ContratoConfig";
 import { CONTRATO_PADRAO_VERSAO } from "./contratoPadrao";
 import {
-  entrarComEmail, sair, meuPerfil, meusCursos, concluirAula,
+  entrarComEmail, sair, meuPerfil, meusCursos, concluirAula, meuStatusOnboarding,
   kpisDoTenant, listarLeads, listarCursos, converterLead,
   listarMatriculas, atualizarSituacaoMatricula, meuTenant, salvarConfigTenant,
   listarUnidades, criarUnidade, alternarUnidade, listarUnidadesPublico,
@@ -258,6 +260,10 @@ function LoginScreen({ onLogged }) {
 
         <button onClick={irParaPrimeiroAcesso} style={{ width: "100%", marginTop: 10, background: "transparent", border: "none", color: T.forest, fontSize: 13, fontWeight: 600 }}>
           Primeiro acesso? Crie sua senha
+        </button>
+
+        <button onClick={() => { window.location.hash = "#/cadastro"; }} style={{ width: "100%", marginTop: 10, background: "transparent", border: "none", color: T.muted, fontSize: 12, fontWeight: 600 }}>
+          Ainda não tem conta? Cadastre-se
         </button>
       </div>
       <div style={{ marginTop: 20, fontSize: 12, color: "#9DBBAF" }}>
@@ -1497,6 +1503,8 @@ export default function App() {
   const [logged, setLogged] = useState(false);
   const [perfil, setPerfil] = useState(null);
   const [erroPerfil, setErroPerfil] = useState("");
+  const [precisaCriarEscola, setPrecisaCriarEscola] = useState(false);
+  const [emailOnboarding, setEmailOnboarding] = useState("");
   const [toastMsg, setToastMsg] = useState("");
   const [tema, setTema] = useState(TEMA_PADRAO);
 
@@ -1507,6 +1515,20 @@ export default function App() {
   }, []);
 
   const carregarPerfil = useCallback(async () => {
+    setErroPerfil("");
+    try {
+      const status = await meuStatusOnboarding();
+      if (status && status.tem_tenant === false) {
+        setEmailOnboarding(status.email || "");
+        setPrecisaCriarEscola(true);
+        return;
+      }
+    } catch (e) {
+      console.error(e);
+      setErroPerfil("Não foi possível carregar seu perfil.");
+      return;
+    }
+    setPrecisaCriarEscola(false);
     try {
       const p = await meuPerfil();
       if (!p) { setErroPerfil("Sua conta existe, mas não está vinculada a uma escola. Fale com o administrador."); return; }
@@ -1547,16 +1569,23 @@ export default function App() {
       }
       setLogged(!!session);
       if (session) carregarPerfil();
-      else { setPerfil(null); setErroPerfil(""); }
+      else { setPerfil(null); setErroPerfil(""); setPrecisaCriarEscola(false); setEmailOnboarding(""); }
     });
     return () => sub.subscription.unsubscribe();
   }, [carregarPerfil]);
 
   const logout = async () => { await sair(); };
 
+  const aoEscolaCriada = useCallback(() => {
+    setPrecisaCriarEscola(false);
+    setPerfil(null);
+    carregarPerfil();
+  }, [carregarPerfil]);
+
 // Roteamento por caminho, ignorando query string (ex.: "#/inscricao?t=slug")
     const [caminhoRota] = (rota || "#/").split("?");
   if (caminhoRota === '#/inscricao') return <PreMatricula />;
+  if (caminhoRota === '#/cadastro') return <Cadastro onLogged={() => { window.location.hash = "#/"; }} />;
   if (caminhoRota === '#/primeiro-acesso') return <PrimeiroAcesso onLogged={() => { window.location.hash = "#/"; }} />;
   if (caminhoRota === '#/recuperar-senha') return <RecuperarSenhaScreen />;
   if (caminhoRota === '#/redefinir-senha') return <RedefinirSenhaScreen onLogged={() => { window.location.hash = "#/"; }} />;
@@ -1570,9 +1599,13 @@ export default function App() {
 
         {!checking && !logged && <LoginScreen onLogged={() => {}} />}
 
-        {!checking && logged && !perfil && !erroPerfil && <Spinner label="Carregando seu perfil…" />}
+        {!checking && logged && !perfil && !erroPerfil && !precisaCriarEscola && <Spinner label="Carregando seu perfil…" />}
 
-        {!checking && logged && erroPerfil && (
+        {!checking && logged && precisaCriarEscola && (
+          <CriarEscola emailSugestao={emailOnboarding} onCriada={aoEscolaCriada} />
+        )}
+
+        {!checking && logged && !precisaCriarEscola && erroPerfil && (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: 48, gap: 12 }}>
             <AlertTriangle size={28} color={tema.danger} />
             <div style={{ fontSize: 14, color: tema.ink, textAlign: "center", maxWidth: 320 }}>{erroPerfil}</div>
