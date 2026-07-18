@@ -1,8 +1,10 @@
 import React, { useMemo, useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { primeiroAcesso } from "./lib/api";
+import ControleAcessibilidade from "./AcessibilidadeControle";
+import { aplicarAcessibilidade } from "./theme";
 
-const T = {
+const T_BASE = {
   ink: "#10201A",
   forest: "#17604A",
   forestDark: "#0E4536",
@@ -13,7 +15,7 @@ const T = {
 
 const FONT = "'Archivo', 'Inter', sans-serif";
 
-function LogoKora({ light = false, size = 32 }) {
+function LogoKora({ light = false, size = 32, T }) {
   const c = light ? "#FFFFFF" : T.forest;
   return (
     <svg width={size * 3.2} height={size} viewBox="0 0 128 40" fill="none">
@@ -25,7 +27,7 @@ function LogoKora({ light = false, size = 32 }) {
   );
 }
 
-function PasswordField({ label, value, onChange, placeholder, autoComplete = "new-password" }) {
+function PasswordField({ label, value, onChange, placeholder, autoComplete = "new-password", T }) {
   const [show, setShow] = useState(false);
 
   return (
@@ -60,6 +62,9 @@ export default function PrimeiroAcesso({ onLogged }) {
   const [erro, setErro] = useState("");
   const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(false);
+  const [prefFonte, setPrefFonte] = useState("normal");
+  const [altoContraste, setAltoContraste] = useState(false);
+  const T = aplicarAcessibilidade(T_BASE, { prefFonte, altoContraste });
 
   const senhaValida = useMemo(() => senha.length >= 8, [senha]);
   const reqTamanho = senha.length >= 8;
@@ -112,10 +117,11 @@ export default function PrimeiroAcesso({ onLogged }) {
   }
 
   return (
-    <div style={{ minHeight: "100vh", background: T.forestDark, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, fontFamily: FONT }}>
+    <div style={{ minHeight: "100vh", background: T.forestDark, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, fontFamily: FONT, zoom: "var(--kl-font-scale)" }}>
+      <ControleAcessibilidade prefFonte={prefFonte} altoContraste={altoContraste} onFonte={setPrefFonte} onContraste={setAltoContraste} T={T} />
       <div style={{ width: "100%", maxWidth: 420, background: "#fff", borderRadius: 22, padding: 24, boxShadow: "0 8px 30px #00000022" }}>
         <div style={{ textAlign: "center", marginBottom: 18 }}>
-          <LogoKora light={false} size={30} />
+          <LogoKora light={false} size={30} T={T} />
           <div style={{ fontSize: 13, color: T.muted, marginTop: 8, lineHeight: 1.5 }}>
             Se a escola já fez sua matrícula, use o mesmo e-mail informado na inscrição.
           </div>
@@ -130,6 +136,7 @@ export default function PrimeiroAcesso({ onLogged }) {
             onChange={(e) => setSenha(e.target.value)}
             placeholder="Mínimo 8 caracteres"
             autoComplete="new-password"
+            T={T}
           />
 
           <PasswordField
@@ -138,6 +145,7 @@ export default function PrimeiroAcesso({ onLogged }) {
             onChange={(e) => setConfirmarSenha(e.target.value)}
             placeholder="Repita a senha"
             autoComplete="new-password"
+            T={T}
           />
 
           <div style={{ margin: "4px 0 12px", display: "flex", flexDirection: "column", gap: 6 }}>

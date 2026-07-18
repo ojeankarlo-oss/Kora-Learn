@@ -1,8 +1,10 @@
 import React, { useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { cadastrarNovaConta } from "./lib/api";
+import ControleAcessibilidade from "./AcessibilidadeControle";
+import { aplicarAcessibilidade } from "./theme";
 
-const T = {
+const T_BASE = {
   ink: "#10201A",
   forest: "#17604A",
   forestDark: "#0E4536",
@@ -13,7 +15,7 @@ const T = {
 
 const FONT = "'Archivo', 'Inter', sans-serif";
 
-function LogoKora({ size = 32 }) {
+function LogoKora({ size = 32, T }) {
   return (
     <svg width={size * 3.2} height={size} viewBox="0 0 128 40" fill="none">
       <rect width="40" height="40" rx="10" fill="#E8F8EF" />
@@ -24,7 +26,7 @@ function LogoKora({ size = 32 }) {
   );
 }
 
-function PasswordField({ label, value, onChange, placeholder, autoComplete = "new-password" }) {
+function PasswordField({ label, value, onChange, placeholder, autoComplete = "new-password", T }) {
   const [show, setShow] = useState(false);
 
   return (
@@ -60,6 +62,9 @@ export default function Cadastro({ onLogged }) {
   const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(false);
   const [aguardandoConfirmacao, setAguardandoConfirmacao] = useState(false);
+  const [prefFonte, setPrefFonte] = useState("normal");
+  const [altoContraste, setAltoContraste] = useState(false);
+  const T = aplicarAcessibilidade(T_BASE, { prefFonte, altoContraste });
 
   const reqTamanho = senha.length >= 8;
   const reqIguais = confirmarSenha.length > 0 && senha === confirmarSenha;
@@ -114,9 +119,10 @@ export default function Cadastro({ onLogged }) {
 
   if (aguardandoConfirmacao) {
     return (
-      <div style={{ minHeight: "100vh", background: T.forestDark, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, fontFamily: FONT }}>
+      <div style={{ minHeight: "100vh", background: T.forestDark, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, fontFamily: FONT, zoom: "var(--kl-font-scale)" }}>
+        <ControleAcessibilidade prefFonte={prefFonte} altoContraste={altoContraste} onFonte={setPrefFonte} onContraste={setAltoContraste} T={T} />
         <div style={{ width: "100%", maxWidth: 420, background: "#fff", borderRadius: 22, padding: 24, boxShadow: "0 8px 30px #00000022", textAlign: "center" }}>
-          <LogoKora size={30} />
+          <LogoKora size={30} T={T} />
           <div style={{ fontSize: 15, fontWeight: 700, color: T.ink, marginTop: 16 }}>
             Enviamos um link de confirmação para seu e-mail.
           </div>
@@ -132,10 +138,11 @@ export default function Cadastro({ onLogged }) {
   }
 
   return (
-    <div style={{ minHeight: "100vh", background: T.forestDark, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, fontFamily: FONT }}>
+    <div style={{ minHeight: "100vh", background: T.forestDark, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, fontFamily: FONT, zoom: "var(--kl-font-scale)" }}>
+      <ControleAcessibilidade prefFonte={prefFonte} altoContraste={altoContraste} onFonte={setPrefFonte} onContraste={setAltoContraste} T={T} />
       <div style={{ width: "100%", maxWidth: 420, background: "#fff", borderRadius: 22, padding: 24, boxShadow: "0 8px 30px #00000022" }}>
         <div style={{ textAlign: "center", marginBottom: 18 }}>
-          <LogoKora size={30} />
+          <LogoKora size={30} T={T} />
           <div style={{ fontSize: 18, fontWeight: 700, color: T.ink, marginTop: 12 }}>Criar minha conta</div>
           <div style={{ fontSize: 13, color: T.muted, marginTop: 8, lineHeight: 1.5 }}>
             Cadastre-se para criar sua escola no KORA Learn.
@@ -151,6 +158,7 @@ export default function Cadastro({ onLogged }) {
             onChange={(e) => setSenha(e.target.value)}
             placeholder="Mínimo 8 caracteres"
             autoComplete="new-password"
+            T={T}
           />
 
           <PasswordField
@@ -159,6 +167,7 @@ export default function Cadastro({ onLogged }) {
             onChange={(e) => setConfirmarSenha(e.target.value)}
             placeholder="Repita a senha"
             autoComplete="new-password"
+            T={T}
           />
 
           <div style={{ margin: "4px 0 12px", display: "flex", flexDirection: "column", gap: 6 }}>

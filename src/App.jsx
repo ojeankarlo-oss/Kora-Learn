@@ -298,6 +298,9 @@ function RecuperarSenhaScreen() {
   const [erro, setErro] = useState("");
   const [sucesso, setSucesso] = useState("");
   const [loading, setLoading] = useState(false);
+  const [prefFonte, setPrefFonte] = useState("normal");
+  const [altoContraste, setAltoContraste] = useState(false);
+  const T = aplicarAcessibilidade(TEMA_PADRAO, { prefFonte, altoContraste });
 
   const voltarAoLogin = () => {
     window.location.hash = "#/";
@@ -329,7 +332,8 @@ function RecuperarSenhaScreen() {
   };
 
   return (
-    <div className="kl-body" style={{ minHeight: "100vh", background: T.forestDark, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+    <div className="kl-body" style={{ minHeight: "100vh", background: T.forestDark, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, zoom: "var(--kl-font-scale)" }}>
+      <ControleAcessibilidade prefFonte={prefFonte} altoContraste={altoContraste} onFonte={setPrefFonte} onContraste={setAltoContraste} T={T} />
       <div style={{ width: "100%", maxWidth: 400, background: "#fff", borderRadius: 24, padding: 24 }}>
         <div style={{ textAlign: "center", marginBottom: 18 }}>
           <LogoKora light={false} size={24} />
@@ -383,6 +387,9 @@ function RedefinirSenhaScreen({ onLogged }) {
   const [loading, setLoading] = useState(false);
   const [recoveryReady, setRecoveryReady] = useState(false);
   const [linkErro, setLinkErro] = useState(false);
+  const [prefFonte, setPrefFonte] = useState("normal");
+  const [altoContraste, setAltoContraste] = useState(false);
+  const T = aplicarAcessibilidade(TEMA_PADRAO, { prefFonte, altoContraste });
 
   const reqTamanho = senha.length >= 8;
   const reqIguais = confirmarSenha.length > 0 && senha === confirmarSenha;
@@ -476,7 +483,8 @@ function RedefinirSenhaScreen({ onLogged }) {
   };
 
   return (
-    <div className="kl-body" style={{ minHeight: "100vh", background: T.forestDark, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+    <div className="kl-body" style={{ minHeight: "100vh", background: T.forestDark, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, zoom: "var(--kl-font-scale)" }}>
+      <ControleAcessibilidade prefFonte={prefFonte} altoContraste={altoContraste} onFonte={setPrefFonte} onContraste={setAltoContraste} T={T} />
       <div style={{ width: "100%", maxWidth: 400, background: "#fff", borderRadius: 24, padding: 24 }}>
         <div style={{ textAlign: "center", marginBottom: 18 }}>
           <LogoKora light={false} size={24} />
