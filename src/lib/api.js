@@ -47,11 +47,24 @@ export async function meuPerfil() {
   if (!user) return null;
   const { data, error } = await supabase
     .from("usuarios")
-    .select("id, tenant_id, perfil, nome, email, avatar_url")
+    .select("id, tenant_id, perfil, nome, email, avatar_url, pref_fonte, pref_alto_contraste")
     .eq("auth_user_id", user.id)
     .single();
   if (error) throw error;
   return data;
+}
+
+// Atualiza as preferências de acessibilidade (fonte/contraste) do usuário logado.
+// Só envia os campos informados, para não sobrescrever o outro com undefined.
+export async function salvarPreferenciasAcessibilidade({ prefFonte, prefAltoContraste } = {}) {
+  const perfil = await meuPerfil();
+  if (!perfil) return;
+  const patch = {};
+  if (prefFonte !== undefined) patch.pref_fonte = prefFonte;
+  if (prefAltoContraste !== undefined) patch.pref_alto_contraste = prefAltoContraste;
+  if (Object.keys(patch).length === 0) return;
+  const { error } = await supabase.from("usuarios").update(patch).eq("id", perfil.id);
+  if (error) throw error;
 }
 
 /* ---------------- CATALOGO + PROGRESSO (ALUNO) ---------------- */
@@ -96,7 +109,10 @@ export async function concluirAula(usuarioId, tenantId, aulaId) {
 
 /* ---------------- PRE-MATRICULA PUBLICA ---------------- */
 
-export async function criarPreMatricula({ tenantId, cursoId, nome, email, telefone, origem = "site", unidadeId = null }) {
+export async function criarPreMatricula({
+  tenantId, cursoId, nome, email, telefone, origem = "site", unidadeId = null,
+  temNecessidadeEspecifica = false, necessidadesEspecificas = null,
+}) {
   const { error } = await supabase.from("leads").insert({
     tenant_id: tenantId,
     curso_id: cursoId ?? null,
@@ -105,6 +121,8 @@ export async function criarPreMatricula({ tenantId, cursoId, nome, email, telefo
     email,
     telefone,
     origem,
+    tem_necessidade_especifica: !!temNecessidadeEspecifica,
+    necessidades_especificas: necessidadesEspecificas && necessidadesEspecificas.length ? necessidadesEspecificas : null,
   });
   if (error) throw error;
 }
@@ -141,7 +159,7 @@ export async function listarCursos() {
 export async function listarLeads(unidadeId) {
   let query = supabase
     .from("leads")
-    .select("id, nome, email, telefone, origem, situacao, created_at, unidade_id, curso:cursos(nome), unidade:unidades(id, nome)")
+    .select("id, nome, email, telefone, origem, situacao, created_at, unidade_id, tem_necessidade_especifica, necessidades_especificas, curso:cursos(nome), unidade:unidades(id, nome)")
     .order("created_at", { ascending: false })
     .limit(50);
   if (unidadeId) query = query.eq("unidade_id", unidadeId);

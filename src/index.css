@@ -1,0 +1,22 @@
+:root {
+  --kl-font-scale: 1;
+}
+
+/* VLibras: reposiciona no canto inferior esquerdo, deixando o direito livre
+   para o controle de acessibilidade e acima da bottom nav do aluno. */
+div[vw] {
+  position: fixed !important;
+  z-index: 60;
+}
+div[vw] div.vw-access-button {
+  left: 16px !important;
+  right: auto !important;
+  bottom: 84px !important;
+  top: auto !important;
+}
+div[vw] div.vw-plugin-wrapper {
+  left: 16px !important;
+  right: auto !important;
+  bottom: 84px !important;
+  top: auto !important;
+}

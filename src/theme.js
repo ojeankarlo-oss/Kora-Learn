@@ -67,6 +67,44 @@ function clarearCor(hex, percent = 30) {
   return `#${novoR.toString(16).padStart(2, "0")}${novoG.toString(16).padStart(2, "0")}${novoB.toString(16).padStart(2, "0")}`;
 }
 
+/* ---------------- ACESSIBILIDADE (fonte + alto contraste) ---------------- */
+
+// 'normal' | 'grande' | 'muito_grande' → multiplicador aplicado via var(--kl-font-scale)
+export const ESCALA_FONTE = {
+  normal: 1,
+  grande: 1.15,
+  muito_grande: 1.3,
+};
+
+// Paleta de alto contraste — tem prioridade sobre a marca do tenant.
+// Fundo bem claro/escuro conforme o padrão de cada tela, texto e bordas no extremo do contraste (AA+).
+export const CORES_ALTO_CONTRASTE = {
+  paper: "#FFFFFF",
+  card: "#FFFFFF",
+  ink: "#000000",
+  line: "#000000",
+  muted: "#1F1F1F",
+  forest: "#0B3D2E",
+  forestDark: "#000000",
+  amber: "#7A4E00",
+  amberSoft: "#FFFFFF",
+  danger: "#8B0000",
+  success: "#0B3D2E",
+};
+
+/**
+ * Aplica as preferências de acessibilidade (fonte/contraste) sobre um tema já montado.
+ * Alto contraste sobrepõe as cores da marca do tenant, por ser uma exigência de acessibilidade.
+ */
+export function aplicarAcessibilidade(tema, { prefFonte = "normal", altoContraste = false } = {}) {
+  return {
+    ...tema,
+    ...(altoContraste ? CORES_ALTO_CONTRASTE : null),
+    fontScale: ESCALA_FONTE[prefFonte] ?? 1,
+    altoContraste: !!altoContraste,
+  };
+}
+
 /**
  * Monta um tema mesclando os dados do tenant com o padrão
  * tenantPub: { id, nome, slug, logo_url, marca: { cor_primaria, cor_destaque, slogan }, modulos: {...} }

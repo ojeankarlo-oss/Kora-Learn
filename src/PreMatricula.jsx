@@ -1,6 +1,16 @@
 import React, { useEffect, useState } from "react";
 import { criarPreMatricula, listarCursosPublico, obterTenantPublico, listarUnidadesPublico } from "./lib/api";
-import { TEMA_PADRAO, montarTema } from "./theme";
+import { TEMA_PADRAO, montarTema, aplicarAcessibilidade } from "./theme";
+import ControleAcessibilidade from "./AcessibilidadeControle";
+
+const NECESSIDADES_OPCOES = [
+  { chave: "baixa_visao", label: "Baixa visão" },
+  { chave: "cegueira", label: "Cegueira" },
+  { chave: "surdez", label: "Surdez ou baixa audição" },
+  { chave: "fisica_motora", label: "Deficiência física/motora" },
+  { chave: "tea", label: "TEA" },
+  { chave: "tdah", label: "TDAH" },
+];
 
 function LogoKoraImg({ logo_url, nomeMarca, T, size = 32 }) {
   if (logo_url) {
@@ -60,7 +70,11 @@ function Campo({ label, type = "text", value, onChange, placeholder, required, T
 }
 
 export default function PreMatricula() {
-  const [tema, setTema] = useState(TEMA_PADRAO);
+  // temaBase: identidade visual do tenant (marca). tema: temaBase + acessibilidade aplicada.
+  const [temaBase, setTemaBase] = useState(TEMA_PADRAO);
+  const [prefFonte, setPrefFonte] = useState("normal");
+  const [altoContraste, setAltoContraste] = useState(false);
+  const tema = aplicarAcessibilidade(temaBase, { prefFonte, altoContraste });
   const [nome, setNome] = useState("");
   const [email, setEmail] = useState("");
   const [telefone, setTelefone] = useState("");
@@ -75,6 +89,16 @@ export default function PreMatricula() {
   const [tenantId, setTenantId] = useState(null);
   const [unidadesPublico, setUnidadesPublico] = useState([]);
   const [unidadeId, setUnidadeId] = useState("");
+  const [temNecessidade, setTemNecessidade] = useState(false);
+  const [necessidadesSelecionadas, setNecessidadesSelecionadas] = useState([]);
+  const [outraSelecionada, setOutraSelecionada] = useState(false);
+  const [outraTexto, setOutraTexto] = useState("");
+
+  function alternarNecessidade(chave) {
+    setNecessidadesSelecionadas((prev) =>
+      prev.includes(chave) ? prev.filter((c) => c !== chave) : [...prev, chave]
+    );
+  }
 
   // Parsear query da URL (dentro do hash)
   const extrairSlugDaURL = () => {
@@ -101,7 +125,7 @@ export default function PreMatricula() {
           .then((lista) => setUnidadesPublico(lista || []))
           .catch(() => setUnidadesPublico([]));
         const temaMontado = montarTema(tenantPub);
-        setTema(temaMontado);
+        setTemaBase(temaMontado);
         
         // Verificar se inscrição está desabilitada
         if (tenantPub.modulos && tenantPub.modulos.inscricao_publica === false) {
@@ -146,6 +170,12 @@ export default function PreMatricula() {
     }
     setLoading(true);
     try {
+      const necessidadesEspecificas = temNecessidade
+        ? [
+            ...necessidadesSelecionadas,
+            ...(outraSelecionada && outraTexto.trim() ? [`outra:${outraTexto.trim()}`] : []),
+          ]
+        : null;
       await criarPreMatricula({
         tenantId: tenantId || import.meta.env.VITE_TENANT_ID,
         cursoId: cursoId || null,
@@ -154,6 +184,8 @@ export default function PreMatricula() {
         nome,
         email: normalizedEmail,
         telefone,
+        temNecessidadeEspecifica: temNecessidade,
+        necessidadesEspecificas,
       });
       setSucesso(true);
     } catch (err) {
@@ -177,7 +209,9 @@ export default function PreMatricula() {
         justifyContent: "center",
         padding: "24px 16px",
         fontFamily: FONT,
+        zoom: "var(--kl-font-scale)",
       }}>
+        <ControleAcessibilidade prefFonte={prefFonte} altoContraste={altoContraste} onFonte={setPrefFonte} onContraste={setAltoContraste} T={tema} />
         <div style={{ fontSize: 14, color: "#CFE0D8" }}>Carregando…</div>
       </div>
     );
@@ -195,7 +229,9 @@ export default function PreMatricula() {
         justifyContent: "center",
         padding: "24px 16px",
         fontFamily: FONT,
+        zoom: "var(--kl-font-scale)",
       }}>
+        <ControleAcessibilidade prefFonte={prefFonte} altoContraste={altoContraste} onFonte={setPrefFonte} onContraste={setAltoContraste} T={tema} />
         <div style={{ marginBottom: 28, textAlign: "center" }}>
           <LogoKoraImg logo_url={tema.logo_url} nomeMarca={tema.nomeMarca} T={tema} size={34} />
         </div>
@@ -227,7 +263,9 @@ export default function PreMatricula() {
         justifyContent: "center",
         padding: "24px 16px",
         fontFamily: FONT,
+        zoom: "var(--kl-font-scale)",
       }}>
+        <ControleAcessibilidade prefFonte={prefFonte} altoContraste={altoContraste} onFonte={setPrefFonte} onContraste={setAltoContraste} T={tema} />
         <div style={{ marginBottom: 28, textAlign: "center" }}>
           <LogoKoraImg logo_url={tema.logo_url} nomeMarca={tema.nomeMarca} T={tema} size={34} />
           <p style={{ color: "#CFE0D8", fontSize: 14, marginTop: 12,
@@ -262,7 +300,9 @@ export default function PreMatricula() {
       justifyContent: "center",
       padding: "24px 16px",
       fontFamily: FONT,
+      zoom: "var(--kl-font-scale)",
     }}>
+      <ControleAcessibilidade prefFonte={prefFonte} altoContraste={altoContraste} onFonte={setPrefFonte} onContraste={setAltoContraste} T={tema} />
       <div style={{ marginBottom: 28, textAlign: "center" }}>
         <LogoKoraImg logo_url={tema.logo_url} nomeMarca={tema.nomeMarca} T={tema} size={34} />
         <p style={{ color: "#CFE0D8", fontSize: 14, marginTop: 12,
@@ -345,6 +385,81 @@ export default function PreMatricula() {
                 </select>
               </div>
             )}
+            <div style={{ marginTop: 20 }}>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 600,
+                color: tema.muted, marginBottom: 8 }}>
+                Você tem alguma deficiência ou necessidade específica? (opcional)
+              </label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => setTemNecessidade(true)}
+                  style={{
+                    flex: 1, padding: "8px 10px", borderRadius: 10,
+                    border: `1.5px solid ${temNecessidade ? tema.forest : tema.line}`,
+                    background: temNecessidade ? tema.forest : "#fff",
+                    color: temNecessidade ? "#fff" : tema.ink,
+                    fontFamily: FONT, fontSize: 13, fontWeight: 700,
+                  }}
+                >
+                  Sim
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setTemNecessidade(false); setNecessidadesSelecionadas([]); setOutraSelecionada(false); setOutraTexto(""); }}
+                  style={{
+                    flex: 1, padding: "8px 10px", borderRadius: 10,
+                    border: `1.5px solid ${!temNecessidade ? tema.forest : tema.line}`,
+                    background: !temNecessidade ? tema.forest : "#fff",
+                    color: !temNecessidade ? "#fff" : tema.ink,
+                    fontFamily: FONT, fontSize: 13, fontWeight: 700,
+                  }}
+                >
+                  Não
+                </button>
+              </div>
+
+              {temNecessidade && (
+                <div style={{ marginTop: 12 }}>
+                  <p style={{ fontSize: 12, color: tema.muted, lineHeight: 1.5, marginTop: 0, marginBottom: 10 }}>
+                    Essa informação é opcional e usada apenas para prepararmos o melhor atendimento para você.
+                    Fica visível somente à coordenação pedagógica da escola.
+                  </p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {NECESSIDADES_OPCOES.map((op) => (
+                      <label key={op.chave} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: tema.ink, fontFamily: FONT }}>
+                        <input
+                          type="checkbox"
+                          checked={necessidadesSelecionadas.includes(op.chave)}
+                          onChange={() => alternarNecessidade(op.chave)}
+                        />
+                        {op.label}
+                      </label>
+                    ))}
+                    <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: tema.ink, fontFamily: FONT }}>
+                      <input
+                        type="checkbox"
+                        checked={outraSelecionada}
+                        onChange={(e) => setOutraSelecionada(e.target.checked)}
+                      />
+                      Outra
+                    </label>
+                    {outraSelecionada && (
+                      <input
+                        value={outraTexto}
+                        onChange={(e) => setOutraTexto(e.target.value)}
+                        placeholder="Qual?"
+                        style={{
+                          width: "100%", padding: "8px 12px", borderRadius: 8,
+                          border: `1.5px solid ${tema.line}`, fontSize: 13, fontFamily: FONT,
+                          outline: "none", boxSizing: "border-box", color: tema.ink,
+                        }}
+                      />
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
             {erro && (
               <div style={{ marginTop: 12, fontSize: 13, color: tema.danger,
                 background: "#fdf0ef", borderRadius: 8, padding: "8px 12px" }}>

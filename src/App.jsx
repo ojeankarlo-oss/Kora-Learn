@@ -5,13 +5,14 @@
 // ============================================================
 import React, { useState, useEffect, useCallback, createContext, useContext } from "react";
 import {
-  Home, PlayCircle, BookOpen, Bell, ChevronRight, CheckCircle2, Lock,
+  Home, PlayCircle, BookOpen, Bell, ChevronRight, ChevronDown, CheckCircle2, Lock,
   Flame, Trophy, Star, Users, AlertTriangle, LogOut, GraduationCap,
   FileText, Clock, TrendingUp, Loader2, Inbox, UserPlus, RefreshCw,
-  Eye, EyeOff, MapPin, Building2, Wallet
+  Eye, EyeOff, MapPin, Building2, Wallet, HeartHandshake
 } from "lucide-react";
 import { supabase } from "./lib/supabaseClient";
-import { TEMA_PADRAO, montarTema } from "./theme";
+import { TEMA_PADRAO, montarTema, aplicarAcessibilidade } from "./theme";
+import ControleAcessibilidade from "./AcessibilidadeControle";
 import PreMatricula from "./PreMatricula";
 import PrimeiroAcesso from "./PrimeiroAcesso";
 import Cadastro from "./Cadastro";
@@ -34,6 +35,7 @@ import {
   listarUnidades, criarUnidade, alternarUnidade, listarUnidadesPublico,
   contratoAtivo, meusAceites, registrarAceite, salvarContrato,
   enviarDocumento, meusDocumentos, documentosDoTenant, avaliarDocumento, urlDocumento,
+  salvarPreferenciasAcessibilidade,
 } from "./lib/api";
 
 /* ---------- Contexto de tema (white-label) ---------- */
@@ -45,6 +47,20 @@ export function useTema() {
 
 /* ---------- Identidade visual (padrão) ---------- */
 const T = TEMA_PADRAO;
+
+/* ---------- Necessidades específicas declaradas na pré-matrícula ---------- */
+const NECESSIDADE_LABELS = {
+  baixa_visao: "Baixa visão",
+  cegueira: "Cegueira",
+  surdez: "Surdez ou baixa audição",
+  fisica_motora: "Deficiência física/motora",
+  tea: "TEA",
+  tdah: "TDAH",
+};
+function formatarNecessidade(chave) {
+  if (chave.startsWith("outra:")) return `Outra: ${chave.slice(6)}`;
+  return NECESSIDADE_LABELS[chave] || chave;
+}
 
 const fontStyles = `
 @import url('https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
@@ -861,6 +877,7 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
   const [configSlogan, setConfigSlogan] = useState(T.slogan);
   const [configModulos, setConfigModulos] = useState(T.modulos || {});
   const [savingConfig, setSavingConfig] = useState(false);
+  const [leadExpandidoId, setLeadExpandidoId] = useState(null);
 
   const carregar = useCallback(async () => {
     try {
@@ -1166,26 +1183,54 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
           </Card>
         ) : (
           <Card style={{ marginTop: 8, overflow: "hidden" }}>
-            {leads.map((l, i) => (
-              <div key={l.id} style={{ padding: "12px 14px", borderTop: i ? `1px solid ${T.line}` : "none", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                <div>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{l.nome}</div>
-                  <div style={{ fontSize: 12, color: T.muted }}>
-                    {l.email}{l.curso?.nome ? ` · interesse: ${l.curso.nome}` : ""} · {l.origem}{l.unidade?.nome ? ` · ${l.unidade.nome}` : ""}
+            {leads.map((l, i) => {
+              const expandido = leadExpandidoId === l.id;
+              return (
+              <div key={l.id} style={{ borderTop: i ? `1px solid ${T.line}` : "none" }}>
+                <div
+                  onClick={() => l.tem_necessidade_especifica && setLeadExpandidoId(expandido ? null : l.id)}
+                  style={{ padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", cursor: l.tem_necessidade_especifica ? "pointer" : "default" }}>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: T.ink, display: "flex", alignItems: "center", gap: 6 }}>
+                      {l.nome}
+                      {l.tem_necessidade_especifica && (
+                        <span title="Necessidade específica declarada" style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 10, fontWeight: 700, color: T.forest, background: "#EAF6F0", padding: "2px 7px", borderRadius: 999 }}>
+                          <HeartHandshake size={11} /> Necessidade específica
+                          {expandido ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 12, color: T.muted }}>
+                      {l.email}{l.curso?.nome ? ` · interesse: ${l.curso.nome}` : ""} · {l.origem}{l.unidade?.nome ? ` · ${l.unidade.nome}` : ""}
+                    </div>
                   </div>
+                  {l.situacao === "convertido" ? (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: T.success, background: "#EAF6F0", padding: "4px 10px", borderRadius: 999 }}>
+                      Convertido
+                    </span>
+                  ) : (
+                    <button onClick={(e) => { e.stopPropagation(); converter(l); }}
+                      style={{ background: T.forest, color: "#fff", border: "none", borderRadius: 10, padding: "8px 12px", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 5 }}>
+                      <UserPlus size={13} /> Matricular
+                    </button>
+                  )}
                 </div>
-                {l.situacao === "convertido" ? (
-                  <span style={{ fontSize: 11, fontWeight: 700, color: T.success, background: "#EAF6F0", padding: "4px 10px", borderRadius: 999 }}>
-                    Convertido
-                  </span>
-                ) : (
-                  <button onClick={() => converter(l)}
-                    style={{ background: T.forest, color: "#fff", border: "none", borderRadius: 10, padding: "8px 12px", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 5 }}>
-                    <UserPlus size={13} /> Matricular
-                  </button>
+                {expandido && l.tem_necessidade_especifica && (
+                  <div style={{ padding: "0 14px 12px 14px", fontSize: 12, color: T.ink }}>
+                    <div style={{ fontWeight: 700, marginBottom: 4 }}>Necessidades declaradas (visível somente à coordenação):</div>
+                    <ul style={{ margin: 0, paddingLeft: 18 }}>
+                      {(l.necessidades_especificas || []).map((chave) => (
+                        <li key={chave}>{formatarNecessidade(chave)}</li>
+                      ))}
+                      {(!l.necessidades_especificas || l.necessidades_especificas.length === 0) && (
+                        <li style={{ color: T.muted }}>Nenhum detalhe informado.</li>
+                      )}
+                    </ul>
+                  </div>
                 )}
               </div>
-            ))}
+              );
+            })}
           </Card>
         )}
       </>
@@ -1529,13 +1574,27 @@ export default function App() {
   const [precisaCriarEscola, setPrecisaCriarEscola] = useState(false);
   const [emailOnboarding, setEmailOnboarding] = useState("");
   const [toastMsg, setToastMsg] = useState("");
-  const [tema, setTema] = useState(TEMA_PADRAO);
+  // temaBase: identidade visual do tenant (marca). tema: temaBase + preferências de acessibilidade aplicadas.
+  const [temaBase, setTemaBase] = useState(TEMA_PADRAO);
+  const [prefFonte, setPrefFonte] = useState("normal");
+  const [altoContraste, setAltoContraste] = useState(false);
+  const tema = aplicarAcessibilidade(temaBase, { prefFonte, altoContraste });
 
   const toast = useCallback((msg) => {
     setToastMsg(msg);
     window.clearTimeout(window.__klToast);
     window.__klToast = window.setTimeout(() => setToastMsg(""), 2400);
   }, []);
+
+  const alterarFonte = useCallback((novaPref) => {
+    setPrefFonte(novaPref);
+    if (perfil) salvarPreferenciasAcessibilidade({ prefFonte: novaPref }).catch((e) => console.error(e));
+  }, [perfil]);
+
+  const alterarContraste = useCallback((novoValor) => {
+    setAltoContraste(novoValor);
+    if (perfil) salvarPreferenciasAcessibilidade({ prefAltoContraste: novoValor }).catch((e) => console.error(e));
+  }, [perfil]);
 
   const carregarPerfil = useCallback(async () => {
     setErroPerfil("");
@@ -1556,7 +1615,10 @@ export default function App() {
       const p = await meuPerfil();
       if (!p) { setErroPerfil("Sua conta existe, mas não está vinculada a uma escola. Fale com o administrador."); return; }
       setPerfil(p);
-      
+      // Aplica automaticamente a preferência de acessibilidade salva na conta.
+      if (p.pref_fonte) setPrefFonte(p.pref_fonte);
+      if (typeof p.pref_alto_contraste === "boolean") setAltoContraste(p.pref_alto_contraste);
+
       // Carregar tenant e aplicar tema
       try {
         const t = await meuTenant();
@@ -1569,7 +1631,7 @@ export default function App() {
             marca: t.config?.marca || {},
             modulos: t.config?.modulos || {},
           });
-          setTema(temaMontado);
+          setTemaBase(temaMontado);
         }
       } catch (e) {
         console.warn("Não foi possível carregar o tenant, usando tema padrão", e);
@@ -1615,8 +1677,16 @@ export default function App() {
   
   return (
     <TemaContext.Provider value={tema}>
-      <div className="kl-body" style={{ minHeight: "100vh", background: tema.paper }}>
+      <div className="kl-body" style={{ minHeight: "100vh", background: tema.paper, zoom: "var(--kl-font-scale)" }}>
         <style>{fontStyles}</style>
+
+        <ControleAcessibilidade
+          prefFonte={prefFonte}
+          altoContraste={altoContraste}
+          onFonte={alterarFonte}
+          onContraste={alterarContraste}
+          T={tema}
+        />
 
         {checking && <Spinner label="Iniciando…" />}
 
@@ -1640,7 +1710,7 @@ export default function App() {
 
         {!checking && logged && perfil && (
           ["super_admin", "gestor"].includes(perfil.perfil)
-            ? <GestorApp perfil={perfil} onLogout={logout} toast={toast} setTema={setTema} />
+            ? <GestorApp perfil={perfil} onLogout={logout} toast={toast} setTema={setTemaBase} />
             : <AlunoApp perfil={perfil} onLogout={logout} toast={toast} />
         )}
 
