@@ -589,12 +589,12 @@ function AlunoLayout({ perfil, onLogout, children }) {
   const T = useTema();
   return (
     <div style={{ minHeight: "100vh", background: T.paper }}>
-      <div style={{ position: "sticky", top: 0, zIndex: 40, background: T.paper, borderBottom: `1px solid ${T.line}`, padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div style={{ position: "sticky", top: 0, zIndex: 40, background: T.paper, borderBottom: `1px solid ${T.line}`, padding: "12px 16px", display: "flex", flexWrap: "wrap", rowGap: 8, justifyContent: "space-between", alignItems: "center" }}>
         <LogoKora size={17} />
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexShrink: 0 }}>
           <span style={{ fontSize: 12, fontWeight: 600, color: T.muted }}>{perfil.nome.split(" ")[0]}</span>
-          <button onClick={onLogout} style={{ background: "#fff", border: `1px solid ${T.line}`, borderRadius: 999, padding: 6 }}>
-            <LogOut size={15} color={T.muted} />
+          <button onClick={onLogout} style={{ display: "flex", alignItems: "center", gap: 6, background: "#fff", border: `1px solid ${T.line}`, borderRadius: 999, padding: "6px 12px", color: T.muted, fontSize: 12, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>
+            <LogOut size={15} color={T.muted} /> Sair
           </button>
         </div>
       </div>
@@ -1133,14 +1133,14 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
 
   return (
     <div style={{ minHeight: "100vh", background: T.paper }}>
-      <div style={{ position: "sticky", top: 0, zIndex: 40, background: T.forestDark, padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div style={{ position: "sticky", top: 0, zIndex: 40, background: T.forestDark, padding: "12px 16px", display: "flex", flexWrap: "wrap", rowGap: 8, justifyContent: "space-between", alignItems: "center" }}>
         <LogoKora light size={16} />
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
           <span style={{ fontSize: 12, fontWeight: 600, color: "#fff", background: "#FFFFFF22", padding: "4px 10px", borderRadius: 999 }}>
             {perfil.nome.split(" ")[0]} · Gestor
           </span>
-          <button onClick={onLogout} style={{ background: "#FFFFFF22", border: "none", borderRadius: 999, padding: 6 }}>
-            <LogOut size={15} color="#fff" />
+          <button onClick={onLogout} style={{ display: "flex", alignItems: "center", gap: 6, background: "#FFFFFF22", border: "none", borderRadius: 999, padding: "6px 12px", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>
+            <LogOut size={15} color="#fff" /> Sair
           </button>
         </div>
       </div>
