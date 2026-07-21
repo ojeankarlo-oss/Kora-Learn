@@ -29,6 +29,8 @@ import DocumentosAlunoModal from "./GestorDocumentos";
 import ContratoConfig from "./ContratoConfig";
 import Chamados from "./Chamados";
 import Pedagogico from "./Pedagogico";
+import ProfessorApp from "./ProfessorApp";
+import MateriaisAvisosAluno from "./MateriaisAvisosAluno";
 import { CONTRATO_PADRAO_VERSAO } from "./contratoPadrao";
 import {
   entrarComEmail, sair, meuPerfil, meusCursos, concluirAula, meuStatusOnboarding,
@@ -795,6 +797,8 @@ function AlunoApp({ perfil, onLogout, toast }) {
 
         {!curso && cursos !== null && !erro && tab === "home" && <FrequenciaAluno T={T} />}
 
+        {cursos !== null && !erro && tab === "home" && <MateriaisAvisosAluno T={T} />}
+
         {curso && tab === "player" && (
           <div className="kl-fade">
             <Eyebrow>{curso.nome} · {curso.disciplina}</Eyebrow>
@@ -1451,7 +1455,7 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
           {activeTab === "configuracoes" && (
       <>
         <ContratoConfig T={T} toast={toast} />
-        <VinculosProfessorTurma T={T} toast={toast} />
+        <VinculosProfessorTurma T={T} toast={toast} perfil={perfil} />
         <Eyebrow style={{ marginTop: 24 }}>Configurações da instituição</Eyebrow>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 12 }}>
           {/* Esquerda: Formulário */}
@@ -1834,7 +1838,9 @@ export default function App() {
         {!checking && logged && perfil && (
           ["super_admin", "gestor"].includes(perfil.perfil)
             ? <GestorApp perfil={perfil} onLogout={logout} toast={toast} setTema={setTemaBase} />
-            : <AlunoApp perfil={perfil} onLogout={logout} toast={toast} />
+            : perfil.perfil === "professor"
+              ? <ProfessorApp perfil={perfil} onLogout={logout} toast={toast} T={tema} />
+              : <AlunoApp perfil={perfil} onLogout={logout} toast={toast} />
         )}
 
         <Toast msg={toastMsg} />

@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Link2, Trash2, RefreshCw, AlertTriangle, Loader2 } from "lucide-react";
+import { Link2, Trash2, RefreshCw, AlertTriangle, Loader2, UserPlus, UserCog } from "lucide-react";
 import {
   listarVinculosProfessorTurma, listarProfessores, listarTurmasAtivas,
-  vincularProfessorTurma, desvincularProfessorTurma,
+  vincularProfessorTurma, desvincularProfessorTurma, criarUsuarioProfessor,
 } from "./lib/api";
 
-export default function VinculosProfessorTurma({ T, toast }) {
+export default function VinculosProfessorTurma({ T, toast, perfil }) {
   const [vinculos, setVinculos] = useState(null);
   const [erro, setErro] = useState("");
   const [professores, setProfessores] = useState([]);
@@ -14,6 +14,10 @@ export default function VinculosProfessorTurma({ T, toast }) {
   const [turmaId, setTurmaId] = useState("");
   const [vinculando, setVinculando] = useState(false);
   const [removendoId, setRemovendoId] = useState(null);
+  const [meVinculando, setMeVinculando] = useState(false);
+  const [novoProfessorNome, setNovoProfessorNome] = useState("");
+  const [novoProfessorEmail, setNovoProfessorEmail] = useState("");
+  const [cadastrandoProfessor, setCadastrandoProfessor] = useState(false);
 
   const corLine = T?.line || "#DDE5E1";
   const corMuted = T?.muted || "#5C6E67";
@@ -79,6 +83,44 @@ export default function VinculosProfessorTurma({ T, toast }) {
     }
   };
 
+  const cadastrarProfessor = async () => {
+    if (!novoProfessorNome.trim() || !novoProfessorEmail.trim()) {
+      toast?.("Informe nome e e-mail do professor.");
+      return;
+    }
+    setCadastrandoProfessor(true);
+    try {
+      await criarUsuarioProfessor({ nome: novoProfessorNome.trim(), email: novoProfessorEmail.trim() });
+      toast?.("Professor cadastrado ✓ Ele já pode fazer o Primeiro acesso com esse e-mail.");
+      setNovoProfessorNome(""); setNovoProfessorEmail("");
+      await carregarListas();
+    } catch (e) {
+      console.error(e);
+      toast?.("Erro ao cadastrar professor");
+    } finally {
+      setCadastrandoProfessor(false);
+    }
+  };
+
+  // Atalho de teste: o gestor logado se vincula como professor da turma selecionada,
+  // para poder acessar as telas de professor (Materiais/Agenda/Chamada) sem depender
+  // de um cadastro de professor separado.
+  const meVincular = async () => {
+    if (!turmaId) { toast?.("Selecione uma turma."); return; }
+    if (!perfil?.id) return;
+    setMeVinculando(true);
+    try {
+      await vincularProfessorTurma(perfil.id, turmaId);
+      toast?.("Você agora está vinculado como professor dessa turma ✓");
+      await carregar();
+    } catch (e) {
+      console.error(e);
+      toast?.("Erro ao vincular você como professor da turma");
+    } finally {
+      setMeVinculando(false);
+    }
+  };
+
   const box = { background: T?.card || "#fff", borderRadius: 14, border: `1px solid ${corLine}`, padding: 16, marginTop: 16 };
   const rotulo = { display: "block", fontSize: 12, fontWeight: 700, color: corMuted, marginBottom: 4 };
   const campo = { width: "100%", padding: "8px 10px", borderRadius: 8, border: `1px solid ${corLine}`, fontSize: 13, boxSizing: "border-box" };
@@ -91,9 +133,24 @@ export default function VinculosProfessorTurma({ T, toast }) {
 
       {professores.length === 0 && (
         <div style={{ marginBottom: 12, padding: 10, borderRadius: 10, background: "#FFF5E3", color: T?.amber || "#E9A13B", fontSize: 13 }}>
-          Nenhum usuário com perfil "professor" cadastrado ainda. Cadastre um colaborador com esse perfil (via RH ou diretamente no banco) para poder vinculá-lo a uma turma.
+          Nenhum usuário com perfil "professor" cadastrado ainda. Cadastre um professor no formulário abaixo (ou vincule-se você mesmo abaixo, para testes) para poder vinculá-lo a uma turma.
         </div>
       )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, alignItems: "end", marginBottom: 14, paddingBottom: 14, borderBottom: `1px solid ${corLine}` }}>
+        <div>
+          <label style={rotulo}>Nome do professor</label>
+          <input style={campo} value={novoProfessorNome} onChange={(e) => setNovoProfessorNome(e.target.value)} placeholder="Nome completo" />
+        </div>
+        <div>
+          <label style={rotulo}>E-mail do professor</label>
+          <input type="email" style={campo} value={novoProfessorEmail} onChange={(e) => setNovoProfessorEmail(e.target.value)} placeholder="professor@exemplo.com" />
+        </div>
+        <button onClick={cadastrarProfessor} disabled={cadastrandoProfessor}
+          style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${corForest}`, color: corForest, borderRadius: 10, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: cadastrandoProfessor ? "not-allowed" : "pointer" }}>
+          <UserPlus size={14} /> {cadastrandoProfessor ? "Cadastrando..." : "Cadastrar professor"}
+        </button>
+      </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, alignItems: "end" }}>
         <div>
@@ -119,6 +176,18 @@ export default function VinculosProfessorTurma({ T, toast }) {
           {vinculando ? "Vinculando..." : "Vincular"}
         </button>
       </div>
+
+      {perfil?.id && (
+        <div style={{ marginTop: 10 }}>
+          <button onClick={meVincular} disabled={meVinculando || !turmaId}
+            style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${corLine}`, color: corInk, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700, cursor: (meVinculando || !turmaId) ? "not-allowed" : "pointer" }}>
+            <UserCog size={13} /> {meVinculando ? "Vinculando..." : "Me vincular como professor desta turma"}
+          </button>
+          <div style={{ fontSize: 11, color: corMuted, marginTop: 4 }}>
+            Selecione a turma acima e use este botão para testar rapidamente as telas de professor com sua própria conta de gestor.
+          </div>
+        </div>
+      )}
 
       <div style={{ marginTop: 16 }}>
         {erro ? (

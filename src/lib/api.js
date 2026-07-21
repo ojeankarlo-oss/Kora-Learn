@@ -852,6 +852,154 @@ export async function cancelarTitulo(tituloId, observacao) {
   return data;
 }
 
+/* ---------------- PROFESSOR (turmas, materiais, avisos) ---------------- */
+
+// Junta cada turma retornada pela RPC com a primeira disciplina do curso
+// (MVP: 1 disciplina por turma, mesmo criterio de montarTurmasComDisciplina).
+async function enriquecerTurmasProfessorComDisciplina(turmasRpc) {
+  const turmaIds = [...new Set((turmasRpc ?? []).map((t) => t.turma_id).filter(Boolean))];
+  if (turmaIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from("turmas")
+    .select("id, curso:cursos(disciplinas(id, nome, ordem))")
+    .in("id", turmaIds);
+  if (error) throw error;
+
+  const disciplinaPorTurma = {};
+  (data ?? []).forEach((t) => {
+    const disciplinas = (t.curso?.disciplinas ?? []).slice().sort((a, b) => (a.ordem ?? 0) - (b.ordem ?? 0));
+    disciplinaPorTurma[t.id] = disciplinas[0] ?? null;
+  });
+
+  return turmasRpc.map((t) => ({
+    turmaId: t.turma_id,
+    turmaNome: t.turma_nome,
+    cursoNome: t.curso_nome,
+    disciplinaId: disciplinaPorTurma[t.turma_id]?.id ?? null,
+    disciplinaNome: disciplinaPorTurma[t.turma_id]?.nome ?? "",
+  }));
+}
+
+// Turmas vinculadas ao professor logado (via professores_turmas), enriquecidas
+// com a disciplina da turma para uso no formulario de publicar material.
+export async function minhasTurmasProfessor() {
+  const { data, error } = await supabase.rpc("minhas_turmas_professor");
+  if (error) throw error;
+  return enriquecerTurmasProfessorComDisciplina(data ?? []);
+}
+
+export async function materiaisDaTurma(turmaId) {
+  const { data, error } = await supabase
+    .from("materiais_professor")
+    .select("id, tipo, titulo, descricao, url, disciplina_id, created_at")
+    .eq("turma_id", turmaId)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function publicarMaterial({ turmaId, disciplinaId, tipo, titulo, descricao, url }) {
+  const perfil = await meuPerfil();
+  const { error } = await supabase.from("materiais_professor").insert({
+    tenant_id: perfil.tenant_id,
+    turma_id: turmaId,
+    disciplina_id: disciplinaId,
+    professor_id: perfil.id,
+    tipo,
+    titulo,
+    descricao: descricao || null,
+    url: url || null,
+  });
+  if (error) throw error;
+}
+
+export async function removerMaterial(materialId) {
+  const { error } = await supabase.from("materiais_professor").delete().eq("id", materialId);
+  if (error) throw error;
+}
+
+export async function avisosDaTurma(turmaId) {
+  const { data, error } = await supabase
+    .from("avisos_turma")
+    .select("id, tipo, titulo, descricao, data_evento, created_at")
+    .eq("turma_id", turmaId)
+    .order("data_evento", { ascending: true, nullsFirst: false })
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function criarAvisoTurma({ turmaId, tipo, titulo, descricao, dataEvento }) {
+  const perfil = await meuPerfil();
+  const { error } = await supabase.from("avisos_turma").insert({
+    tenant_id: perfil.tenant_id,
+    turma_id: turmaId,
+    professor_id: perfil.id,
+    tipo,
+    titulo,
+    descricao: descricao || null,
+    data_evento: dataEvento || null,
+  });
+  if (error) throw error;
+}
+
+export async function removerAvisoTurma(avisoId) {
+  const { error } = await supabase.from("avisos_turma").delete().eq("id", avisoId);
+  if (error) throw error;
+}
+
+// Materiais e avisos das turmas em que o aluno logado tem matricula ativa.
+export async function materiaisEAvisosDoAluno() {
+  const perfil = await meuPerfil();
+  const { data: matriculas, error: eMat } = await supabase
+    .from("matriculas")
+    .select("turma_id")
+    .eq("usuario_id", perfil.id)
+    .eq("situacao", "ativa");
+  if (eMat) throw eMat;
+
+  const turmaIds = [...new Set((matriculas ?? []).map((m) => m.turma_id).filter(Boolean))];
+  if (turmaIds.length === 0) return { materiais: [], avisos: [] };
+
+  const [materiaisRes, avisosRes] = await Promise.all([
+    supabase
+      .from("materiais_professor")
+      .select("id, tipo, titulo, descricao, url, turma_id, created_at, turma:turmas(nome)")
+      .in("turma_id", turmaIds)
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("avisos_turma")
+      .select("id, tipo, titulo, descricao, data_evento, turma_id, created_at, turma:turmas(nome)")
+      .in("turma_id", turmaIds)
+      .order("data_evento", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: false }),
+  ]);
+  if (materiaisRes.error) throw materiaisRes.error;
+  if (avisosRes.error) throw avisosRes.error;
+
+  return { materiais: materiaisRes.data ?? [], avisos: avisosRes.data ?? [] };
+}
+
+// Cria um usuario com perfil 'professor' (sem auth_user_id ainda) para que a
+// pessoa possa fazer "Primeiro acesso" depois com o mesmo e-mail, igual ao
+// fluxo ja usado para alunos (ver primeiroAcesso/vincular_minha_conta).
+export async function criarUsuarioProfessor({ nome, email }) {
+  const perfil = await meuPerfil();
+  const { data, error } = await supabase
+    .from("usuarios")
+    .insert({
+      tenant_id: perfil.tenant_id,
+      perfil: "professor",
+      nome,
+      email,
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
 // KPIs do mes corrente (somas em centavos + contagens). RLS restringe ao tenant.
 export async function kpisFinanceiro() {
   const agora = new Date();
