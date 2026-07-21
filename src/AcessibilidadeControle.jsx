@@ -49,7 +49,12 @@ export default function ControleAcessibilidade({ prefFonte = "normal", altoContr
   );
 
   return (
-    <div style={{ position: "fixed", top: 12, right: 12, zIndex: 80 }}>
+    // top: 64 (não 12) para não sobrepor o cabeçalho fixo/sticky do GestorApp e do
+    // AlunoLayout, que também ficam colados no canto superior direito (~51-53px de
+    // altura) e continham o botão "Sair" — com top:12 este botão redondo (42x42,
+    // zIndex 80) cobria inteiramente o botão Sair (zIndex 40), tornando-o invisível
+    // e inclicável mesmo com o tema em cores padrão.
+    <div style={{ position: "fixed", top: 64, right: 12, zIndex: 80 }}>
       {aberto && (
         <div
           role="dialog"
