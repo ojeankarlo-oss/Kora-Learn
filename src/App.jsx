@@ -886,6 +886,7 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
   const [configModulos, setConfigModulos] = useState(T.modulos || {});
   const [savingConfig, setSavingConfig] = useState(false);
   const [leadExpandidoId, setLeadExpandidoId] = useState(null);
+  const [alunoExpandidoId, setAlunoExpandidoId] = useState(null);
 
   const carregar = useCallback(async () => {
     try {
@@ -1279,15 +1280,28 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
           </Card>
         ) : (
           <Card style={{ marginTop: 8, overflow: "hidden" }}>
-            {matriculasFiltradas.map((m, i) => (
-              <div key={m.id} style={{ padding: "12px 14px", borderTop: i ? "1px solid " + T.line : "none", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {matriculasFiltradas.map((m, i) => {
+              const alunoExpandido = alunoExpandidoId === m.id;
+              return (
+              <div key={m.id} style={{ borderTop: i ? "1px solid " + T.line : "none" }}>
+              <div
+                onClick={() => m.aluno?.tem_necessidade_especifica && setAlunoExpandidoId(alunoExpandido ? null : m.id)}
+                style={{ padding: "12px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", cursor: m.aluno?.tem_necessidade_especifica ? "pointer" : "default" }}>
                 <div>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: T.ink }}>{m.aluno?.nome ?? "Aluno"}</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: T.ink, display: "flex", alignItems: "center", gap: 6 }}>
+                    {m.aluno?.nome ?? "Aluno"}
+                    {m.aluno?.tem_necessidade_especifica && (
+                      <span title="Necessidade específica declarada" style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 10, fontWeight: 700, color: T.forest, background: "#EAF6F0", padding: "2px 7px", borderRadius: 999 }}>
+                        <HeartHandshake size={11} /> Necessidade específica
+                        {alunoExpandido ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                      </span>
+                    )}
+                  </div>
                   <div style={{ fontSize: 12, color: T.muted }}>
                     {m.aluno?.email}{m.curso?.nome ? " · " + m.curso.nome : ""}{m.unidade?.nome ? " · " + m.unidade.nome : ""}
                   </div>
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }} onClick={(e) => e.stopPropagation()}>
                   <span style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 999, ...badgeStyle(m.situacao) }}>
                     {m.situacao === "ativa" ? "Ativa" : m.situacao === "cancelada" ? "Cancelada" : m.situacao === "concluida" ? "Concluída" : m.situacao === "trancada" ? "Trancada" : m.situacao}
                   </span>
@@ -1308,7 +1322,22 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
                   )}
                 </div>
               </div>
-            ))}
+              {alunoExpandido && m.aluno?.tem_necessidade_especifica && (
+                <div style={{ padding: "0 14px 12px 14px", fontSize: 12, color: T.ink }}>
+                  <div style={{ fontWeight: 700, marginBottom: 4 }}>Necessidades declaradas (visível somente à coordenação):</div>
+                  <ul style={{ margin: 0, paddingLeft: 18 }}>
+                    {(m.aluno.necessidades_especificas || []).map((chave) => (
+                      <li key={chave}>{formatarNecessidade(chave)}</li>
+                    ))}
+                    {(!m.aluno.necessidades_especificas || m.aluno.necessidades_especificas.length === 0) && (
+                      <li style={{ color: T.muted }}>Nenhum detalhe informado.</li>
+                    )}
+                  </ul>
+                </div>
+              )}
+              </div>
+              );
+            })}
           </Card>
         )}
       </>

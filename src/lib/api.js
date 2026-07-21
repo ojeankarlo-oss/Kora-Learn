@@ -171,7 +171,7 @@ export async function listarLeads(unidadeId) {
 export async function listarMatriculas(unidadeId) {
   let query = supabase
     .from("matriculas")
-    .select("id, situacao, data_matricula, created_at, unidade_id, aluno:usuarios(id, nome, email, telefone), curso:cursos(id, nome), unidade:unidades(id, nome)")
+    .select("id, situacao, data_matricula, created_at, unidade_id, aluno:usuarios(id, nome, email, telefone, tem_necessidade_especifica, necessidades_especificas), curso:cursos(id, nome), unidade:unidades(id, nome)")
     .order("created_at", { ascending: false })
     .limit(200);
   if (unidadeId) query = query.eq("unidade_id", unidadeId);
@@ -216,6 +216,8 @@ export async function converterLead(lead, tenantId, cursoId, turmaId = null) {
       nome: lead.nome,
       email: lead.email,
       telefone: lead.telefone,
+      tem_necessidade_especifica: lead.tem_necessidade_especifica ?? false,
+      necessidades_especificas: lead.necessidades_especificas ?? null,
     })
     .select()
     .single();
