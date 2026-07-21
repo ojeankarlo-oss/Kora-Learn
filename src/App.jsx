@@ -930,6 +930,14 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
   }, [unidadeFiltro]);
 
   useEffect(() => { carregarMatriculas(); }, [carregarMatriculas]);
+
+  // Recarrega leads/kpis e matrículas juntos: usada após qualquer ação de
+  // escrita que possa afetar as duas listas (ex.: matricular move um lead
+  // para matrículas; cancelar/reativar matrícula muda o KPI de alunos ativos).
+  const carregarPainel = useCallback(async () => {
+    await Promise.all([carregar(), carregarMatriculas()]);
+  }, [carregar, carregarMatriculas]);
+
   const carregarUnidades = useCallback(async () => {
     setUnidadesLoading(true);
     setUnidadesError("");
@@ -963,7 +971,7 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
     try {
       await converterLead(lead, perfil.tenant_id, cursos[0].id);
       toast(`${lead.nome.split(" ")[0]} matriculado(a) em ${cursos[0].nome} ✓`);
-      carregar();
+      await carregarPainel();
     } catch (e) {
       console.error(e);
       toast("Erro ao converter lead");
@@ -980,7 +988,7 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
     try {
       await atualizarSituacaoMatricula(matricula.id, novaSituacao);
       toast("Situação atualizada");
-      carregarMatriculas();
+      await carregarPainel();
     } catch (e) {
       console.error(e);
       toast("Erro ao atualizar a matrícula");
