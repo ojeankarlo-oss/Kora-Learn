@@ -431,6 +431,91 @@ export async function urlDocumento(storage_path) {
   return data.signedUrl;
 }
 
+/* ---------------- CHAMADOS (documentos e material pedagógico) ---------------- */
+
+// Cria um chamado (solicitação) do usuário logado. O prazo de resposta é
+// calculado no banco a partir de tenants.config.sla_chamados_horas por tipo.
+export async function criarChamado({ tipo, assunto, detalhes, unidadeId }) {
+  const perfil = await meuPerfil();
+  const { data: prazo, error: ePrazo } = await supabase.rpc("calcular_prazo_chamado", {
+    p_tenant_id: perfil.tenant_id,
+    p_tipo: tipo,
+  });
+  if (ePrazo) throw ePrazo;
+
+  const { data, error } = await supabase
+    .from("chamados")
+    .insert({
+      tenant_id: perfil.tenant_id,
+      unidade_id: unidadeId ?? null,
+      solicitante_id: perfil.id,
+      tipo,
+      assunto,
+      detalhes: detalhes || null,
+      situacao: "aberto",
+      prazo_resposta: prazo,
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+// Chamados do usuário logado (RLS já restringe aos próprios).
+export async function meusChamados() {
+  const { data, error } = await supabase
+    .from("chamados")
+    .select("id, tipo, assunto, detalhes, situacao, prazo_resposta, respondido_em, created_at")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
+// Chamados do tenant (staff), ordenados por urgência (prazo mais próximo primeiro).
+export async function listarChamados({ tipo, situacao } = {}) {
+  let query = supabase
+    .from("chamados")
+    .select("id, tipo, assunto, detalhes, situacao, prazo_resposta, respondido_em, respondido_por, created_at, unidade_id, solicitante:usuarios!chamados_solicitante_id_fkey(id, nome, email)")
+    .order("prazo_resposta", { ascending: true });
+  if (tipo) query = query.eq("tipo", tipo);
+  if (situacao) query = query.eq("situacao", situacao);
+  const { data, error } = await query;
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function atualizarSituacaoChamado(chamadoId, situacao) {
+  const perfil = await meuPerfil();
+  const patch = { situacao };
+  if (situacao === "respondido" || situacao === "fechado") {
+    patch.respondido_em = new Date().toISOString();
+    patch.respondido_por = perfil.id;
+  }
+  const { error } = await supabase.from("chamados").update(patch).eq("id", chamadoId);
+  if (error) throw error;
+}
+
+export async function mensagensDoChamado(chamadoId) {
+  const { data, error } = await supabase
+    .from("chamados_mensagens")
+    .select("id, mensagem, created_at, autor:usuarios(id, nome)")
+    .eq("chamado_id", chamadoId)
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function enviarMensagemChamado(chamadoId, mensagem) {
+  const perfil = await meuPerfil();
+  const { error } = await supabase.from("chamados_mensagens").insert({
+    tenant_id: perfil.tenant_id,
+    chamado_id: chamadoId,
+    autor_id: perfil.id,
+    mensagem,
+  });
+  if (error) throw error;
+}
+
 /* ---------------- RH (colaboradores) ---------------- */
 
 // Lista colaboradores. Se souPerfilGestor=true, inclui salario (tabela completa);

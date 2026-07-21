@@ -27,6 +27,8 @@ import Chamada from "./Chamada";
 import FrequenciaAluno from "./FrequenciaAluno";
 import DocumentosAlunoModal from "./GestorDocumentos";
 import ContratoConfig from "./ContratoConfig";
+import Chamados from "./Chamados";
+import Pedagogico from "./Pedagogico";
 import { CONTRATO_PADRAO_VERSAO } from "./contratoPadrao";
 import {
   entrarComEmail, sair, meuPerfil, meusCursos, concluirAula, meuStatusOnboarding,
@@ -884,6 +886,8 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
   const [configCorDestaque, setConfigCorDestaque] = useState(T.amber);
   const [configSlogan, setConfigSlogan] = useState(T.slogan);
   const [configModulos, setConfigModulos] = useState(T.modulos || {});
+  const [configSlaDocumento, setConfigSlaDocumento] = useState(72);
+  const [configSlaMaterialPedagogico, setConfigSlaMaterialPedagogico] = useState(48);
   const [savingConfig, setSavingConfig] = useState(false);
   const [leadExpandidoId, setLeadExpandidoId] = useState(null);
   const [alunoExpandidoId, setAlunoExpandidoId] = useState(null);
@@ -964,6 +968,14 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
       setConfigCorDestaque(T.amber);
       setConfigSlogan(T.slogan);
       setConfigModulos(T.modulos || {});
+      // O tema (T) não carrega o SLA de chamados, então busca direto do tenant.
+      meuTenant()
+        .then((t) => {
+          const sla = t?.config?.sla_chamados_horas || {};
+          setConfigSlaDocumento(sla.documento ?? 72);
+          setConfigSlaMaterialPedagogico(sla.material_pedagogico ?? 48);
+        })
+        .catch((e) => console.error(e));
     }
   }, [activeTab, T]);
 
@@ -1045,6 +1057,10 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
             slogan: configSlogan,
           },
           modulos: configModulos,
+          sla_chamados_horas: {
+            documento: Number(configSlaDocumento) || 72,
+            material_pedagogico: Number(configSlaMaterialPedagogico) || 48,
+          },
         },
       });
       toast("Configurações salvas! 🎉");
@@ -1167,6 +1183,12 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
           </button>
           <button onClick={() => setActiveTab("chamada")} style={{ background: activeTab === "chamada" ? T.forest : "none", color: activeTab === "chamada" ? "#fff" : T.muted, border: activeTab === "chamada" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
             Chamada
+          </button>
+          <button onClick={() => setActiveTab("chamados")} style={{ background: activeTab === "chamados" ? T.forest : "none", color: activeTab === "chamados" ? "#fff" : T.muted, border: activeTab === "chamados" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
+            Chamados
+          </button>
+          <button onClick={() => setActiveTab("pedagogico")} style={{ background: activeTab === "pedagogico" ? T.forest : "none", color: activeTab === "pedagogico" ? "#fff" : T.muted, border: activeTab === "pedagogico" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
+            Pedagógico
           </button>
           <button onClick={() => setActiveTab("configuracoes")} style={{ background: activeTab === "configuracoes" ? T.forest : "none", color: activeTab === "configuracoes" ? "#fff" : T.muted, border: activeTab === "configuracoes" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
         Configurações
@@ -1525,6 +1547,40 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
                 ))}
               </div>
 
+              {/* Prazo de resposta (SLA) dos chamados */}
+              <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${T.line}` }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: T.ink, marginBottom: 4 }}>Prazo de resposta (SLA)</div>
+                <div style={{ fontSize: 12, color: T.muted, marginBottom: 12 }}>
+                  Tempo padrão para responder aos chamados abertos por alunos e pela coordenação.
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <div>
+                    <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 4 }}>
+                      Documentos (horas)
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={configSlaDocumento}
+                      onChange={(e) => setConfigSlaDocumento(e.target.value)}
+                      style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: `1px solid ${T.line}`, fontSize: 13, color: T.ink, boxSizing: "border-box", outline: "none" }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 4 }}>
+                      Material pedagógico (horas)
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={configSlaMaterialPedagogico}
+                      onChange={(e) => setConfigSlaMaterialPedagogico(e.target.value)}
+                      style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: `1px solid ${T.line}`, fontSize: 13, color: T.ink, boxSizing: "border-box", outline: "none" }}
+                    />
+                  </div>
+                </div>
+              </div>
+
               {/* Botão Salvar */}
               <button
                 onClick={salvarConfiguracao}
@@ -1588,6 +1644,12 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
     )}
     {activeTab === "chamada" && (
       <Chamada perfil={perfil} toast={toast} T={T} />
+    )}
+    {activeTab === "chamados" && (
+      <Chamados toast={toast} T={T} />
+    )}
+    {activeTab === "pedagogico" && (
+      <Pedagogico toast={toast} T={T} />
     )}
     {docAluno && (
     <DocumentosAlunoModal aluno={docAluno} toast={toast} T={T} onClose={() => setDocAluno(null)} onChange={atualizarDocsPendentes} />

@@ -1,9 +1,38 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { FileText, Clock, CheckCircle2, AlertTriangle, RefreshCw, Upload, Eye, Loader2 } from "lucide-react";
-import { meusDocumentos, enviarDocumento, urlDocumento } from "./lib/api";
+import { FileText, Clock, CheckCircle2, AlertTriangle, RefreshCw, Upload, Eye, Loader2, Send, Inbox } from "lucide-react";
+import { meusDocumentos, enviarDocumento, urlDocumento, criarChamado, meusChamados } from "./lib/api";
 
 const TIPOS_SUGERIDOS = ["RG/CNH", "CPF", "Comprovante de residência", "Histórico escolar", "Outro"];
 const TAMANHO_MAXIMO = 10 * 1024 * 1024; // 10MB
+
+const TIPOS_SOLICITACAO = [
+  "Histórico Escolar",
+  "Declaração de Matrícula",
+  "Declaração de Frequência",
+  "Declaração de Conclusão",
+  "Boletim",
+  "Certificado",
+  "Declaração de Transferência",
+  "Comprovante de Estudos",
+  "Outro",
+];
+
+const SITUACAO_CHAMADO_INFO = {
+  aberto: { label: "Aberto", bg: "#FFF5E3" },
+  em_andamento: { label: "Em andamento", bg: "#FFF5E3" },
+  respondido: { label: "Respondido", bg: "#EAF6F0" },
+  fechado: { label: "Fechado", bg: "#EAF6F0" },
+};
+
+function formatarPrazoSolicitacao(iso) {
+  if (!iso) return "Sem prazo";
+  const d = new Date(iso);
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  return `${dd}/${mm} ${hh}:${min}`;
+}
 
 function situacaoInfo(situacao, T) {
   if (situacao === "aprovado") {
@@ -23,6 +52,13 @@ export default function MeusDocumentos({ perfil, toast, T }) {
   const [urlCarregando, setUrlCarregando] = useState(null);
   const inputRef = useRef(null);
 
+  const [mostrarFormSolicitacao, setMostrarFormSolicitacao] = useState(false);
+  const [tipoSolicitacao, setTipoSolicitacao] = useState(TIPOS_SOLICITACAO[0]);
+  const [observacaoSolicitacao, setObservacaoSolicitacao] = useState("");
+  const [enviandoSolicitacao, setEnviandoSolicitacao] = useState(false);
+  const [solicitacoes, setSolicitacoes] = useState(null);
+  const [erroSolicitacoes, setErroSolicitacoes] = useState("");
+
   const carregar = useCallback(async () => {
     try {
       const data = await meusDocumentos(perfil.id);
@@ -36,6 +72,37 @@ export default function MeusDocumentos({ perfil, toast, T }) {
   }, [perfil.id]);
 
   useEffect(() => { carregar(); }, [carregar]);
+
+  const carregarSolicitacoes = useCallback(async () => {
+    try {
+      const data = await meusChamados();
+      setSolicitacoes(data.filter((c) => c.tipo === "documento"));
+      setErroSolicitacoes("");
+    } catch (e) {
+      console.error(e);
+      setErroSolicitacoes("Não foi possível carregar suas solicitações.");
+      setSolicitacoes([]);
+    }
+  }, []);
+
+  useEffect(() => { carregarSolicitacoes(); }, [carregarSolicitacoes]);
+
+  const enviarSolicitacao = async (e) => {
+    e.preventDefault();
+    setEnviandoSolicitacao(true);
+    try {
+      await criarChamado({ tipo: "documento", assunto: tipoSolicitacao, detalhes: observacaoSolicitacao.trim() });
+      toast && toast("Solicitação enviada ✓");
+      setObservacaoSolicitacao("");
+      setMostrarFormSolicitacao(false);
+      await carregarSolicitacoes();
+    } catch (err) {
+      console.error(err);
+      toast && toast("Erro ao enviar solicitação");
+    } finally {
+      setEnviandoSolicitacao(false);
+    }
+  };
 
   const escolherArquivo = (tipoParaEnviar) => {
     setTipo(tipoParaEnviar || tipo);
@@ -131,6 +198,89 @@ export default function MeusDocumentos({ perfil, toast, T }) {
             {enviando ? "Enviando..." : "Enviar documento"}
           </button>
         </div>
+      </div>
+
+      <div style={{ background: "#fff", border: `1px solid ${corLine}`, borderRadius: 14, padding: 14, marginBottom: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: corMuted, textTransform: "uppercase" }}>
+            Solicitações de documentos
+          </div>
+          <button
+            onClick={() => setMostrarFormSolicitacao((v) => !v)}
+            style={{ background: "none", border: `1px solid ${corLine}`, color: corInk, borderRadius: 10, padding: "6px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+          >
+            {mostrarFormSolicitacao ? "Cancelar" : "Solicitar documento"}
+          </button>
+        </div>
+
+        {mostrarFormSolicitacao && (
+          <form onSubmit={enviarSolicitacao} style={{ marginTop: 12 }}>
+            <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: corMuted, marginBottom: 4 }}>Tipo de documento *</label>
+            <select
+              value={tipoSolicitacao}
+              onChange={(e) => setTipoSolicitacao(e.target.value)}
+              style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: `1px solid ${corLine}`, fontSize: 13, boxSizing: "border-box", marginBottom: 10 }}
+            >
+              {TIPOS_SOLICITACAO.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+            <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: corMuted, marginBottom: 4 }}>Observação (opcional)</label>
+            <textarea
+              value={observacaoSolicitacao}
+              onChange={(e) => setObservacaoSolicitacao(e.target.value)}
+              placeholder="Detalhe o que você precisa, se necessário"
+              style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: `1px solid ${corLine}`, fontSize: 13, boxSizing: "border-box", minHeight: 60, fontFamily: "inherit" }}
+            />
+            <button
+              type="submit"
+              disabled={enviandoSolicitacao}
+              style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 10, background: corForest, color: "#fff", border: "none", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 700, opacity: enviandoSolicitacao ? 0.7 : 1 }}
+            >
+              {enviandoSolicitacao ? <Loader2 className="kl-spin" size={16} /> : <Send size={16} />}
+              {enviandoSolicitacao ? "Enviando..." : "Enviar solicitação"}
+            </button>
+          </form>
+        )}
+
+        <div style={{ marginTop: mostrarFormSolicitacao ? 16 : 12, fontSize: 11, fontWeight: 700, color: corMuted, textTransform: "uppercase" }}>
+          Minhas solicitações
+        </div>
+
+        {solicitacoes === null && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, color: corMuted, fontSize: 13, padding: "10px 0" }}>
+            <Loader2 className="kl-spin" size={16} /> Carregando...
+          </div>
+        )}
+
+        {solicitacoes !== null && erroSolicitacoes && (
+          <div style={{ fontSize: 13, color: T?.danger || "#C24A3F", padding: "10px 0" }}>{erroSolicitacoes}</div>
+        )}
+
+        {solicitacoes !== null && !erroSolicitacoes && solicitacoes.length === 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, color: corMuted, fontSize: 13, padding: "10px 0" }}>
+            <Inbox size={16} /> Nenhuma solicitação enviada ainda.
+          </div>
+        )}
+
+        {solicitacoes !== null && solicitacoes.length > 0 && (
+          <div style={{ marginTop: 8, border: `1px solid ${corLine}`, borderRadius: 10, overflow: "hidden" }}>
+            {solicitacoes.map((s, i) => {
+              const info = SITUACAO_CHAMADO_INFO[s.situacao] || { label: s.situacao, bg: "#F1F4F2" };
+              return (
+                <div key={s.id} style={{ padding: "10px 12px", borderTop: i ? `1px solid ${corLine}` : "none", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: corInk }}>{s.assunto}</div>
+                    <div style={{ fontSize: 11, color: corMuted }}>Prazo estimado: {formatarPrazoSolicitacao(s.prazo_resposta)}</div>
+                  </div>
+                  <span style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 999, background: info.bg, color: corInk }}>
+                    {info.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {documentos === null && (
