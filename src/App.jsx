@@ -582,6 +582,27 @@ function RedefinirSenhaScreen({ onLogged }) {
 /* ============================================================
    ALUNO
    ============================================================ */
+// Cabeçalho + wrapper comuns a TODAS as telas autenticadas do portal do aluno
+// (inclusive telas de carregamento/erro/aceite de termos), para que o botão
+// de sair nunca fique ausente numa tela nova sem que alguém "esqueça" de somá-lo.
+function AlunoLayout({ perfil, onLogout, children }) {
+  const T = useTema();
+  return (
+    <div style={{ minHeight: "100vh", background: T.paper }}>
+      <div style={{ position: "sticky", top: 0, zIndex: 40, background: T.paper, borderBottom: `1px solid ${T.line}`, padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <LogoKora size={17} />
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: T.muted }}>{perfil.nome.split(" ")[0]}</span>
+          <button onClick={onLogout} style={{ background: "#fff", border: `1px solid ${T.line}`, borderRadius: 999, padding: 6 }}>
+            <LogOut size={15} color={T.muted} />
+          </button>
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
 function AlunoApp({ perfil, onLogout, toast }) {
   const T = useTema();
   const [tab, setTab] = useState("home");
@@ -655,53 +676,48 @@ function AlunoApp({ perfil, onLogout, toast }) {
 
   if (aceiteStatus === "verificando" || cursos === null) {
     return (
-      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, color: T.muted, fontSize: 13 }}>
-          <RefreshCw className="kl-spin" size={16} /> Carregando seu portal...
+      <AlunoLayout perfil={perfil} onLogout={onLogout}>
+        <div style={{ minHeight: "70vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, color: T.muted, fontSize: 13 }}>
+            <RefreshCw className="kl-spin" size={16} /> Carregando seu portal...
+          </div>
         </div>
-      </div>
+      </AlunoLayout>
     );
   }
 
   if (aceiteStatus === "erro") {
     return (
-      <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, padding: 24, textAlign: "center" }}>
-        <AlertTriangle size={28} color={T.danger} />
-        <div style={{ fontSize: 14, color: T.ink, maxWidth: 320 }}>
-          Não foi possível verificar seus termos de aceite. Verifique sua conexão e tente novamente.
+      <AlunoLayout perfil={perfil} onLogout={onLogout}>
+        <div style={{ minHeight: "70vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, padding: 24, textAlign: "center" }}>
+          <AlertTriangle size={28} color={T.danger} />
+          <div style={{ fontSize: 14, color: T.ink, maxWidth: 320 }}>
+            Não foi possível verificar seus termos de aceite. Verifique sua conexão e tente novamente.
+          </div>
+          <button onClick={() => setAceiteTentativa((t) => t + 1)} style={{ background: T.forest, color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontSize: 13, fontWeight: 700 }}>
+            Tentar novamente
+          </button>
         </div>
-        <button onClick={() => setAceiteTentativa((t) => t + 1)} style={{ background: T.forest, color: "#fff", border: "none", borderRadius: 10, padding: "10px 18px", fontSize: 13, fontWeight: 700 }}>
-          Tentar novamente
-        </button>
-      </div>
+      </AlunoLayout>
     );
   }
 
   if (aceiteStatus === "pendente") {
     return (
-      <AceiteScreen
-        perfil={perfil}
-        curso={curso}
-        toast={toast}
-        T={T}
-        onAceito={() => setAceiteStatus("ok")}
-      />
+      <AlunoLayout perfil={perfil} onLogout={onLogout}>
+        <AceiteScreen
+          perfil={perfil}
+          curso={curso}
+          toast={toast}
+          T={T}
+          onAceito={() => setAceiteStatus("ok")}
+        />
+      </AlunoLayout>
     );
   }
 
   return (
-    <>
-      {/* Topbar */}
-      <div style={{ position: "sticky", top: 0, zIndex: 40, background: T.paper, borderBottom: `1px solid ${T.line}`, padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <LogoKora size={17} />
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: T.muted }}>{perfil.nome.split(" ")[0]}</span>
-          <button onClick={onLogout} style={{ background: "#fff", border: `1px solid ${T.line}`, borderRadius: 999, padding: 6 }}>
-            <LogOut size={15} color={T.muted} />
-          </button>
-        </div>
-      </div>
-
+    <AlunoLayout perfil={perfil} onLogout={onLogout}>
       <div style={{ padding: "16px 16px 110px", maxWidth: 560, margin: "0 auto" }}>
         {cursos === null && <Spinner label="Carregando seus cursos…" />}
 
@@ -850,7 +866,7 @@ function AlunoApp({ perfil, onLogout, toast }) {
           })}
         </div>
       )}
-    </>
+    </AlunoLayout>
   );
 }
 
