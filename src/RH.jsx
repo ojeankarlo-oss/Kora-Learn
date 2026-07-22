@@ -1,9 +1,17 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Users, UserPlus, Pencil, UserX, UserCheck, RefreshCw, AlertTriangle, Loader2, X } from "lucide-react";
+import { Users, UserPlus, Pencil, UserX, UserCheck, RefreshCw, AlertTriangle, Loader2, X, Link2 } from "lucide-react";
 import {
   listarColaboradores, criarColaborador, atualizarColaborador,
   desligarColaborador, reativarColaborador, listarUnidades,
+  vincularAcessoProfessorColaborador,
 } from "./lib/api";
+
+// Reconhece funcoes de ensino (hoje so "professor(a)"; poderia crescer para uma
+// lista configuravel por escola no futuro) para decidir quando oferecer o botao
+// de dar acesso/vincular turmas.
+function ehFuncaoDeEnsino(funcao) {
+  return /professor/i.test(funcao || "");
+}
 
 const brl = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 
@@ -211,7 +219,7 @@ function ColaboradorModal({ inicial, unidades, souPerfilGestor, salvando, onSalv
   );
 }
 
-export default function RH({ perfil, toast, T }) {
+export default function RH({ perfil, toast, T, onVincularTurmas }) {
   const souPerfilGestor = perfil?.perfil === "gestor" || perfil?.perfil === "super_admin";
 
   const [unidades, setUnidades] = useState([]);
@@ -223,6 +231,7 @@ export default function RH({ perfil, toast, T }) {
   const [editando, setEditando] = useState(null);
   const [salvando, setSalvando] = useState(false);
   const [processandoId, setProcessandoId] = useState(null);
+  const [vinculandoId, setVinculandoId] = useState(null);
 
   const carregarUnidades = useCallback(async () => {
     try {
@@ -307,6 +316,27 @@ export default function RH({ perfil, toast, T }) {
       toast?.("Erro ao reativar colaborador");
     } finally {
       setProcessandoId(null);
+    }
+  };
+
+  // Cria o login de professor deste colaborador (se ainda nao tiver) reaproveitando
+  // nome/email ja cadastrados no RH, e abre a tela de vinculo com turmas ja
+  // pre-selecionando esse professor. Ponto de entrada unico do cadastro de professor.
+  const vincularProfessor = async (colab) => {
+    setVinculandoId(colab.id);
+    try {
+      const jaTinhaAcesso = !!colab.usuario_id;
+      const usuarioId = await vincularAcessoProfessorColaborador(colab);
+      if (!jaTinhaAcesso) {
+        toast?.("Login de professor criado ✓");
+        await carregar();
+      }
+      onVincularTurmas?.({ ...colab, usuario_id: usuarioId });
+    } catch (e) {
+      console.error(e);
+      toast?.(e?.message || "Erro ao dar acesso de professor");
+    } finally {
+      setVinculandoId(null);
     }
   };
 
@@ -398,6 +428,12 @@ export default function RH({ perfil, toast, T }) {
                     style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: `1px solid ${corLine}`, color: corInk, borderRadius: 10, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: ocupado ? "not-allowed" : "pointer" }}>
                     <Pencil size={13} /> Editar
                   </button>
+                  {ehFuncaoDeEnsino(c.funcao) && c.situacao !== "desligado" && (
+                    <button onClick={() => vincularProfessor(c)} disabled={ocupado || vinculandoId === c.id}
+                      style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: `1px solid ${corForest}`, color: corForest, borderRadius: 10, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: (ocupado || vinculandoId === c.id) ? "not-allowed" : "pointer" }}>
+                      <Link2 size={13} /> {vinculandoId === c.id ? "Vinculando..." : c.usuario_id ? "Vincular às turmas" : "Dar acesso de professor"}
+                    </button>
+                  )}
                   {c.situacao !== "desligado" ? (
                     <button onClick={() => desligar(c)} disabled={ocupado}
                       style={{ display: "flex", alignItems: "center", gap: 4, background: corDanger, color: "#fff", border: "none", borderRadius: 10, padding: "8px 12px", fontSize: 12, fontWeight: 700, cursor: ocupado ? "not-allowed" : "pointer" }}>

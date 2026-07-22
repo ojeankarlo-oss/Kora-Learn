@@ -1,11 +1,15 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Link2, Trash2, RefreshCw, AlertTriangle, Loader2, UserPlus, UserCog } from "lucide-react";
+import { Link2, Trash2, RefreshCw, AlertTriangle, Loader2, UserCog } from "lucide-react";
 import {
   listarVinculosProfessorTurma, listarProfessores, listarTurmasAtivas,
-  vincularProfessorTurma, desvincularProfessorTurma, criarUsuarioProfessor,
+  vincularProfessorTurma, desvincularProfessorTurma,
 } from "./lib/api";
 
-export default function VinculosProfessorTurma({ T, toast, perfil }) {
+// O cadastro de professor agora acontece sempre pelo RH (ficha do colaborador
+// -> "Dar acesso de professor" / "Vincular às turmas"), que chega aqui com
+// professorPreSelecionado ja preenchido. Esta tela passa a servir so para
+// GERENCIAR vinculos ja criados (vincular a mais turmas, listar, desvincular).
+export default function VinculosProfessorTurma({ T, toast, perfil, professorPreSelecionado }) {
   const [vinculos, setVinculos] = useState(null);
   const [erro, setErro] = useState("");
   const [professores, setProfessores] = useState([]);
@@ -15,9 +19,6 @@ export default function VinculosProfessorTurma({ T, toast, perfil }) {
   const [vinculando, setVinculando] = useState(false);
   const [removendoId, setRemovendoId] = useState(null);
   const [meVinculando, setMeVinculando] = useState(false);
-  const [novoProfessorNome, setNovoProfessorNome] = useState("");
-  const [novoProfessorEmail, setNovoProfessorEmail] = useState("");
-  const [cadastrandoProfessor, setCadastrandoProfessor] = useState(false);
 
   const corLine = T?.line || "#DDE5E1";
   const corMuted = T?.muted || "#5C6E67";
@@ -52,6 +53,13 @@ export default function VinculosProfessorTurma({ T, toast, perfil }) {
   useEffect(() => { carregar(); }, [carregar]);
   useEffect(() => { carregarListas(); }, [carregarListas]);
 
+  // Pre-seleciona o professor vindo do RH (botão "Vincular às turmas").
+  useEffect(() => {
+    if (professorPreSelecionado?.usuario_id) {
+      setProfessorId(professorPreSelecionado.usuario_id);
+    }
+  }, [professorPreSelecionado]);
+
   const vincular = async () => {
     if (!professorId || !turmaId) { toast?.("Selecione o professor e a turma."); return; }
     setVinculando(true);
@@ -80,25 +88,6 @@ export default function VinculosProfessorTurma({ T, toast, perfil }) {
       toast?.("Erro ao remover vínculo");
     } finally {
       setRemovendoId(null);
-    }
-  };
-
-  const cadastrarProfessor = async () => {
-    if (!novoProfessorNome.trim() || !novoProfessorEmail.trim()) {
-      toast?.("Informe nome e e-mail do professor.");
-      return;
-    }
-    setCadastrandoProfessor(true);
-    try {
-      await criarUsuarioProfessor({ nome: novoProfessorNome.trim(), email: novoProfessorEmail.trim() });
-      toast?.("Professor cadastrado ✓ Ele já pode fazer o Primeiro acesso com esse e-mail.");
-      setNovoProfessorNome(""); setNovoProfessorEmail("");
-      await carregarListas();
-    } catch (e) {
-      console.error(e);
-      toast?.("Erro ao cadastrar professor");
-    } finally {
-      setCadastrandoProfessor(false);
     }
   };
 
@@ -133,24 +122,15 @@ export default function VinculosProfessorTurma({ T, toast, perfil }) {
 
       {professores.length === 0 && (
         <div style={{ marginBottom: 12, padding: 10, borderRadius: 10, background: "#FFF5E3", color: T?.amber || "#E9A13B", fontSize: 13 }}>
-          Nenhum usuário com perfil "professor" cadastrado ainda. Cadastre um professor no formulário abaixo (ou vincule-se você mesmo abaixo, para testes) para poder vinculá-lo a uma turma.
+          Nenhum usuário com perfil "professor" cadastrado ainda. Vá até a aba <strong>RH</strong>, abra a ficha do colaborador e use o botão "Dar acesso de professor" (ou vincule-se você mesmo abaixo, para testes).
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, alignItems: "end", marginBottom: 14, paddingBottom: 14, borderBottom: `1px solid ${corLine}` }}>
-        <div>
-          <label style={rotulo}>Nome do professor</label>
-          <input style={campo} value={novoProfessorNome} onChange={(e) => setNovoProfessorNome(e.target.value)} placeholder="Nome completo" />
+      {professorPreSelecionado?.usuario_id && (
+        <div style={{ marginBottom: 12, padding: 10, borderRadius: 10, background: "#EAF6F0", color: corForest, fontSize: 13, fontWeight: 600 }}>
+          Professor pré-selecionado: {professorPreSelecionado.nome}. Escolha a turma abaixo e clique em Vincular.
         </div>
-        <div>
-          <label style={rotulo}>E-mail do professor</label>
-          <input type="email" style={campo} value={novoProfessorEmail} onChange={(e) => setNovoProfessorEmail(e.target.value)} placeholder="professor@exemplo.com" />
-        </div>
-        <button onClick={cadastrarProfessor} disabled={cadastrandoProfessor}
-          style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${corForest}`, color: corForest, borderRadius: 10, padding: "8px 16px", fontSize: 13, fontWeight: 700, cursor: cadastrandoProfessor ? "not-allowed" : "pointer" }}>
-          <UserPlus size={14} /> {cadastrandoProfessor ? "Cadastrando..." : "Cadastrar professor"}
-        </button>
-      </div>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, alignItems: "end" }}>
         <div>

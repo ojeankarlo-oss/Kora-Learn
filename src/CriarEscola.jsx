@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { criarMinhaEscola } from "./lib/api";
+import { criarMinhaEscola, sair } from "./lib/api";
 
 const T = {
   ink: "#10201A",
@@ -50,6 +50,16 @@ export default function CriarEscola({ emailSugestao, onCriada }) {
   const [erro, setErro] = useState("");
   const [sucesso, setSucesso] = useState("");
   const [loading, setLoading] = useState(false);
+  const [saindo, setSaindo] = useState(false);
+
+  const voltarAoLogin = async () => {
+    setSaindo(true);
+    try {
+      await sair();
+    } finally {
+      window.location.hash = "#/";
+    }
+  };
 
   const handleNomeEscolaChange = (valor) => {
     setNomeEscola(valor);
@@ -153,6 +163,9 @@ export default function CriarEscola({ emailSugestao, onCriada }) {
             {loading ? "Criando..." : "Criar minha escola"}
           </button>
         </form>
+        <button onClick={voltarAoLogin} disabled={saindo} style={{ width: "100%", marginTop: 10, background: "transparent", border: "none", color: T.forest, fontWeight: 600, fontSize: 13, cursor: saindo ? "not-allowed" : "pointer" }}>
+          Voltar ao login
+        </button>
       </div>
     </div>
   );

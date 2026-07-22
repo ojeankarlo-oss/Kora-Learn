@@ -3,7 +3,7 @@
 // Salvar em: src/App.jsx  (projeto Vite React)
 // Depende de: src/lib/supabaseClient.js e src/lib/api.js
 // ============================================================
-import React, { useState, useEffect, useCallback, createContext, useContext } from "react";
+import React, { useState, useEffect, useCallback, useRef, createContext, useContext } from "react";
 import {
   Home, PlayCircle, BookOpen, Bell, ChevronRight, ChevronDown, CheckCircle2, Lock,
   Flame, Trophy, Star, Users, AlertTriangle, LogOut, GraduationCap,
@@ -911,6 +911,9 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
   const [savingConfig, setSavingConfig] = useState(false);
   const [leadExpandidoId, setLeadExpandidoId] = useState(null);
   const [alunoExpandidoId, setAlunoExpandidoId] = useState(null);
+  // Colaborador do RH em processo de vinculo com turmas (ponto de entrada
+  // unico do cadastro de professor: RH -> "Vincular às turmas").
+  const [professorParaVincular, setProfessorParaVincular] = useState(null);
 
   const carregar = useCallback(async () => {
     try {
@@ -1455,7 +1458,7 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
           {activeTab === "configuracoes" && (
       <>
         <ContratoConfig T={T} toast={toast} />
-        <VinculosProfessorTurma T={T} toast={toast} perfil={perfil} />
+        <VinculosProfessorTurma T={T} toast={toast} perfil={perfil} professorPreSelecionado={professorParaVincular} />
         <Eyebrow style={{ marginTop: 24 }}>Configurações da instituição</Eyebrow>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 12 }}>
           {/* Esquerda: Formulário */}
@@ -1660,7 +1663,7 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
       <FinanceiroGestor perfil={perfil} toast={toast} T={T} />
     )}
     {activeTab === "rh" && T.modulos?.rh && (
-      <RH perfil={perfil} toast={toast} T={T} />
+      <RH perfil={perfil} toast={toast} T={T} onVincularTurmas={(colab) => { setProfessorParaVincular(colab); setActiveTab("configuracoes"); }} />
     )}
     {activeTab === "chamada" && (
       <Chamada perfil={perfil} toast={toast} T={T} />
@@ -1723,23 +1726,36 @@ export default function App() {
     if (perfil) salvarPreferenciasAcessibilidade({ prefAltoContraste: novoValor }).catch((e) => console.error(e));
   }, [perfil]);
 
+  // Cada chamada a carregarPerfil recebe um id sequencial; respostas de uma
+  // chamada que nao seja mais a mais recente sao descartadas. Isso evita a
+  // condicao de corrida entre a verificacao de onboarding disparada pelo
+  // SIGNED_IN do auth.signUp (que pode rodar antes de vincular_minha_conta
+  // terminar, no fluxo de Primeiro Acesso) e a nova verificacao explicita
+  // feita depois que o vinculo foi confirmado.
+  const perfilReqIdRef = useRef(0);
+
   const carregarPerfil = useCallback(async () => {
+    const reqId = ++perfilReqIdRef.current;
     setErroPerfil("");
     try {
       const status = await meuStatusOnboarding();
+      if (reqId !== perfilReqIdRef.current) return;
       if (status && status.tem_tenant === false) {
         setEmailOnboarding(status.email || "");
         setPrecisaCriarEscola(true);
         return;
       }
     } catch (e) {
+      if (reqId !== perfilReqIdRef.current) return;
       console.error(e);
       setErroPerfil("Não foi possível carregar seu perfil.");
       return;
     }
+    if (reqId !== perfilReqIdRef.current) return;
     setPrecisaCriarEscola(false);
     try {
       const p = await meuPerfil();
+      if (reqId !== perfilReqIdRef.current) return;
       if (!p) { setErroPerfil("Sua conta existe, mas não está vinculada a uma escola. Fale com o administrador."); return; }
       setPerfil(p);
       // Aplica automaticamente a preferência de acessibilidade salva na conta.
@@ -1749,6 +1765,7 @@ export default function App() {
       // Carregar tenant e aplicar tema
       try {
         const t = await meuTenant();
+        if (reqId !== perfilReqIdRef.current) return;
         if (t) {
           const temaMontado = montarTema({
             id: t.id,
@@ -1764,6 +1781,7 @@ export default function App() {
         console.warn("Não foi possível carregar o tenant, usando tema padrão", e);
       }
     } catch (e) {
+      if (reqId !== perfilReqIdRef.current) return;
       console.error(e);
       setErroPerfil("Não foi possível carregar seu perfil.");
     }
@@ -1798,7 +1816,7 @@ export default function App() {
     const [caminhoRota] = (rota || "#/").split("?");
   if (caminhoRota === '#/inscricao') return <PreMatricula />;
   if (caminhoRota === '#/cadastro') return <Cadastro onLogged={() => { window.location.hash = "#/"; }} />;
-  if (caminhoRota === '#/primeiro-acesso') return <PrimeiroAcesso onLogged={() => { window.location.hash = "#/"; }} />;
+  if (caminhoRota === '#/primeiro-acesso') return <PrimeiroAcesso onLogged={() => { carregarPerfil(); window.location.hash = "#/"; }} />;
   if (caminhoRota === '#/recuperar-senha') return <RecuperarSenhaScreen />;
   if (caminhoRota === '#/redefinir-senha') return <RedefinirSenhaScreen onLogged={() => { window.location.hash = "#/"; }} />;
   
@@ -1830,7 +1848,7 @@ export default function App() {
             <AlertTriangle size={28} color={tema.danger} />
             <div style={{ fontSize: 14, color: tema.ink, textAlign: "center", maxWidth: 320 }}>{erroPerfil}</div>
             <button onClick={logout} style={{ padding: "10px 20px", borderRadius: 12, border: "none", background: tema.forest, color: "#fff", fontWeight: 600 }}>
-              Sair
+              Voltar ao login
             </button>
           </div>
         )}

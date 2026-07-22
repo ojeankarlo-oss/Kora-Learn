@@ -1000,6 +1000,20 @@ export async function criarUsuarioProfessor({ nome, email }) {
   return data;
 }
 
+// Ponto único de entrada para dar acesso de professor a um colaborador do RH
+// (colaboradores.usuario_id, migration 008). Reaproveita criarUsuarioProfessor
+// usando nome/email já cadastrados no RH, sem pedir de novo, e evita criar um
+// segundo login se o colaborador já tiver um usuario_id vinculado.
+export async function vincularAcessoProfessorColaborador(colaborador) {
+  if (colaborador.usuario_id) return colaborador.usuario_id;
+  if (!colaborador.email) {
+    throw new Error("Cadastre um e-mail para este colaborador antes de dar acesso de professor.");
+  }
+  const usuario = await criarUsuarioProfessor({ nome: colaborador.nome, email: colaborador.email });
+  await atualizarColaborador(colaborador.id, { usuario_id: usuario.id });
+  return usuario.id;
+}
+
 // KPIs do mes corrente (somas em centavos + contagens). RLS restringe ao tenant.
 export async function kpisFinanceiro() {
   const agora = new Date();
