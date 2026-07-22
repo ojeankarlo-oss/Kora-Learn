@@ -22,6 +22,7 @@ import MeusDocumentos from "./MeusDocumentos";
 import Financeiro from "./Financeiro";
 import FinanceiroGestor from "./FinanceiroGestor";
 import RH from "./RH";
+import Cursos from "./Cursos";
 import VinculosProfessorTurma from "./VinculosProfessorTurma";
 import Chamada from "./Chamada";
 import FrequenciaAluno from "./FrequenciaAluno";
@@ -1190,6 +1191,9 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
       <button onClick={() => setActiveTab("leads")} style={{ background: activeTab === "leads" ? T.forest : "none", color: activeTab === "leads" ? "#fff" : T.muted, border: activeTab === "leads" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
         Leads
       </button>
+      <button onClick={() => setActiveTab("cursos")} style={{ background: activeTab === "cursos" ? T.forest : "none", color: activeTab === "cursos" ? "#fff" : T.muted, border: activeTab === "cursos" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
+        Cursos
+      </button>
       {T.modulos?.alunos !== false && (
         <button onClick={() => setActiveTab("alunos")} style={{ background: activeTab === "alunos" ? T.forest : "none", color: activeTab === "alunos" ? "#fff" : T.muted, border: activeTab === "alunos" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
           Alunos
@@ -1659,6 +1663,9 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
       </>
     )}
       </div>
+    {activeTab === "cursos" && (
+      <Cursos perfil={perfil} toast={toast} T={T} />
+    )}
     {activeTab === "financeiro" && T.modulos?.financeiro && (
       <FinanceiroGestor perfil={perfil} toast={toast} T={T} />
     )}

@@ -198,6 +198,189 @@ export async function listarCursosPublico() {
   return data ?? [];
 }
 
+/* ---------------- CURSOS / DISCIPLINAS / AULAS (GESTOR — AUTOSSERVIÇO) ----------------
+   Cadastro dos cursos e da grade (disciplinas/aulas) direto pelo gestor, sem
+   depender de ninguém rodando SQL. RLS de cursos/disciplinas/aulas já restringe
+   staff ao próprio tenant (migration 001) — as consultas abaixo não filtram
+   tenant_id manualmente, na mesma convenção de listarColaboradores/listarUnidades. */
+
+export async function listarCursosDoGestor() {
+  const { data, error } = await supabase
+    .from("cursos")
+    .select("*")
+    .order("ordem")
+    .order("nome");
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function criarCurso({ nome, descricao, nivel, area, cargaHoraria, precoCentavos, imagemUrl }) {
+  const perfil = await meuPerfil();
+  const { data, error } = await supabase
+    .from("cursos")
+    .insert({
+      tenant_id: perfil.tenant_id,
+      nome,
+      descricao: descricao || null,
+      nivel,
+      area: area || null,
+      carga_horaria: cargaHoraria ?? null,
+      preco_centavos: precoCentavos ?? null,
+      imagem_url: imagemUrl || null,
+      ativo: true,
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function atualizarCurso(cursoId, dados) {
+  const { error } = await supabase.from("cursos").update(dados).eq("id", cursoId);
+  if (error) throw error;
+}
+
+// Arquivar (não deletar): preserva o histórico de matrículas já feitas nesse
+// curso. listarCursosPublico já filtra ativo=true, então um curso arquivado
+// some do formulário público mas continua visível/editável no painel.
+export async function arquivarCurso(cursoId) {
+  const { error } = await supabase.from("cursos").update({ ativo: false }).eq("id", cursoId);
+  if (error) throw error;
+}
+
+export async function reativarCurso(cursoId) {
+  const { error } = await supabase.from("cursos").update({ ativo: true }).eq("id", cursoId);
+  if (error) throw error;
+}
+
+export async function listarDisciplinasDoCurso(cursoId) {
+  const { data, error } = await supabase
+    .from("disciplinas")
+    .select("*")
+    .eq("curso_id", cursoId)
+    .order("ordem");
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function criarDisciplina({ cursoId, nome, descricao, ordem, cargaHoraria }) {
+  const perfil = await meuPerfil();
+  const { error } = await supabase.from("disciplinas").insert({
+    tenant_id: perfil.tenant_id,
+    curso_id: cursoId,
+    nome,
+    descricao: descricao || null,
+    ordem: ordem ?? 0,
+    carga_horaria: cargaHoraria ?? null,
+  });
+  if (error) throw error;
+}
+
+export async function atualizarDisciplina(disciplinaId, dados) {
+  const { error } = await supabase.from("disciplinas").update(dados).eq("id", disciplinaId);
+  if (error) throw error;
+}
+
+// Remove a disciplina e, em cascata, suas aulas (apagando também do Storage os
+// arquivos de aula que tiverem sido enviados) — evita erro de chave estrangeira
+// caso o banco não tenha ON DELETE CASCADE configurado nessa FK.
+export async function removerDisciplina(disciplinaId) {
+  const { data: aulas, error: erroAulas } = await supabase
+    .from("aulas")
+    .select("id, url_video")
+    .eq("disciplina_id", disciplinaId);
+  if (erroAulas) throw erroAulas;
+
+  for (const aula of aulas ?? []) {
+    if (aulaUsaArquivoStorage(aula.url_video)) {
+      try { await removerArquivoConteudoCurso(aula.url_video); } catch (e) { console.error(e); }
+    }
+  }
+  if ((aulas ?? []).length > 0) {
+    const { error: erroDelAulas } = await supabase.from("aulas").delete().eq("disciplina_id", disciplinaId);
+    if (erroDelAulas) throw erroDelAulas;
+  }
+
+  const { error } = await supabase.from("disciplinas").delete().eq("id", disciplinaId);
+  if (error) throw error;
+}
+
+export async function listarAulasDaDisciplina(disciplinaId) {
+  const { data, error } = await supabase
+    .from("aulas")
+    .select("*")
+    .eq("disciplina_id", disciplinaId)
+    .order("ordem");
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function criarAula({ disciplinaId, titulo, tipo, urlVideo, duracaoSeg, ordem, obrigatoria }) {
+  const perfil = await meuPerfil();
+  const { error } = await supabase.from("aulas").insert({
+    tenant_id: perfil.tenant_id,
+    disciplina_id: disciplinaId,
+    titulo,
+    tipo,
+    url_video: urlVideo || null,
+    duracao_seg: duracaoSeg ?? null,
+    ordem: ordem ?? 0,
+    obrigatoria: !!obrigatoria,
+  });
+  if (error) throw error;
+}
+
+export async function atualizarAula(aulaId, dados) {
+  const { error } = await supabase.from("aulas").update(dados).eq("id", aulaId);
+  if (error) throw error;
+}
+
+// urlVideoAtual: passado pelo chamador (que já tem a aula carregada) para que,
+// se o conteúdo era um arquivo enviado ao Storage, ele seja removido também de lá.
+export async function removerAula(aulaId, urlVideoAtual) {
+  if (aulaUsaArquivoStorage(urlVideoAtual)) {
+    try { await removerArquivoConteudoCurso(urlVideoAtual); } catch (e) { console.error(e); }
+  }
+  const { error } = await supabase.from("aulas").delete().eq("id", aulaId);
+  if (error) throw error;
+}
+
+/* ---------------- CONTEÚDO DE AULA NO STORAGE (bucket "conteudo-cursos") ----------------
+   O bucket precisa ser criado no painel do Supabase (leitura restrita a staff do
+   tenant + alunos matriculados no curso; escrita restrita a staff), no mesmo
+   padrão de segurança do bucket "documentos" (Fase 6) — não é possível criar
+   buckets/policies a partir deste repo (sem migrations versionadas aqui).
+   aulas.url_video não tem uma coluna separada para "tipo de fonte", então a
+   convenção usada aqui é: valor começando com http(s) = link externo; qualquer
+   outro valor = caminho dentro do bucket "conteudo-cursos". */
+const BUCKET_CONTEUDO_CURSOS = "conteudo-cursos";
+
+export function aulaUsaArquivoStorage(urlVideo) {
+  return !!urlVideo && !/^https?:\/\//i.test(urlVideo);
+}
+
+// Envia o arquivo (vídeo/PDF) de uma aula para o Storage e devolve o caminho
+// salvo (para ser gravado em aulas.url_video via criarAula/atualizarAula).
+export async function enviarArquivoConteudoCurso({ tenantId, disciplinaId, file }) {
+  const path = `${tenantId}/${disciplinaId}/${Date.now()}_${file.name}`;
+  const { error } = await supabase.storage.from(BUCKET_CONTEUDO_CURSOS).upload(path, file, { upsert: false });
+  if (error) throw error;
+  return path;
+}
+
+// URL temporária (1h) para abrir/assistir um arquivo de aula enviado ao Storage.
+export async function urlConteudoCurso(path) {
+  const { data, error } = await supabase.storage.from(BUCKET_CONTEUDO_CURSOS).createSignedUrl(path, 3600);
+  if (error) throw error;
+  return data.signedUrl;
+}
+
+export async function removerArquivoConteudoCurso(path) {
+  if (!path) return;
+  const { error } = await supabase.storage.from(BUCKET_CONTEUDO_CURSOS).remove([path]);
+  if (error) throw error;
+}
+
 export async function primeiroAcesso(email, senha) {
   const { data, error } = await supabase.auth.signUp({ email, password: senha });
   if (error) throw error;
