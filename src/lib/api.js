@@ -1000,18 +1000,59 @@ export async function criarUsuarioProfessor({ nome, email }) {
   return data;
 }
 
+// Usuario (qualquer perfil) ja existente com esse e-mail neste tenant. Existe
+// para nunca duplicar login: "usuarios" tem unique constraint (tenant_id, email)
+// e cadastros de teste anteriores (ou outro fluxo, ex.: aluno) podem ja ter
+// criado uma linha com o mesmo e-mail antes do colaborador pedir acesso de professor.
+async function buscarUsuarioPorEmailNoTenant(email, tenantId) {
+  const { data, error } = await supabase
+    .from("usuarios")
+    .select("id, perfil, nome, email")
+    .eq("tenant_id", tenantId)
+    .eq("email", email)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
 // Ponto único de entrada para dar acesso de professor a um colaborador do RH
 // (colaboradores.usuario_id, migration 008). Reaproveita criarUsuarioProfessor
 // usando nome/email já cadastrados no RH, sem pedir de novo, e evita criar um
-// segundo login se o colaborador já tiver um usuario_id vinculado.
+// segundo login se o colaborador já tiver um usuario_id vinculado — ou se já
+// existir um usuario com esse e-mail no tenant (reaproveita, só garante perfil
+// 'professor'), evitando o erro de unique constraint (tenant_id, email).
 export async function vincularAcessoProfessorColaborador(colaborador) {
   if (colaborador.usuario_id) return colaborador.usuario_id;
   if (!colaborador.email) {
     throw new Error("Cadastre um e-mail para este colaborador antes de dar acesso de professor.");
   }
-  const usuario = await criarUsuarioProfessor({ nome: colaborador.nome, email: colaborador.email });
-  await atualizarColaborador(colaborador.id, { usuario_id: usuario.id });
-  return usuario.id;
+
+  let usuarioId;
+  try {
+    const perfil = await meuPerfil();
+    const existente = await buscarUsuarioPorEmailNoTenant(colaborador.email, perfil.tenant_id);
+    if (existente) {
+      if (existente.perfil !== "professor") {
+        const { error } = await supabase.from("usuarios").update({ perfil: "professor" }).eq("id", existente.id);
+        if (error) throw error;
+      }
+      usuarioId = existente.id;
+    } else {
+      const usuario = await criarUsuarioProfessor({ nome: colaborador.nome, email: colaborador.email });
+      usuarioId = usuario.id;
+    }
+  } catch (e) {
+    console.error(e);
+    throw new Error("Não foi possível criar o acesso de professor. Tente novamente.");
+  }
+
+  try {
+    await atualizarColaborador(colaborador.id, { usuario_id: usuarioId });
+  } catch (e) {
+    console.error(e);
+    throw new Error("Login criado, mas não foi possível vincular ao colaborador. Tente novamente.");
+  }
+  return usuarioId;
 }
 
 // KPIs do mes corrente (somas em centavos + contagens). RLS restringe ao tenant.

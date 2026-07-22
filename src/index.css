@@ -2,13 +2,25 @@
   --kl-font-scale: 1;
 }
 
-/* VLibras: reposiciona no canto inferior esquerdo, deixando o direito livre
-   para o controle de acessibilidade e acima da bottom nav do aluno. */
-div[vw] {
+/* VLibras: ancorado no canto inferior direito, que é o padrão nativo do
+   próprio script (ver [vw-access-button]{right:0;left:auto} injetado por ele)
+   — brigar por outro canto é frágil, porque o widget pode reafirmar sua
+   posição sozinho a cada atualização/resize. O controle de acessibilidade
+   (A-/A+/contraste) fica no canto SUPERIOR direito (ver AcessibilidadeControle.jsx),
+   então não há conflito de canto entre os dois.
+   bottom:84px libera a bottom nav fixa do Aluno (~60px de altura + safe-area).
+   Selector com maior especificidade que o "div[vw]" do próprio widget, e
+   TODAS as propriedades com !important — inclusive z-index, que antes não
+   tinha !important e por isso nunca vencia o z-index:2147483645!important
+   que o script injeta; isso fazia o widget renderizar por cima de QUALQUER
+   coisa (inclusive modais em tela cheia), mesmo com a posição "corrigida".
+   z-index:55 fica acima da navegação/toast (40/50) e abaixo dos modais (60)
+   e do controle de acessibilidade (80), para não cobrir formulários abertos. */
+html body div[vw] {
   position: fixed !important;
-  z-index: 60;
-  left: 16px !important;
-  right: auto !important;
+  z-index: 55 !important;
+  right: 16px !important;
+  left: auto !important;
   bottom: 84px !important;
   top: auto !important;
   transform: none !important;
