@@ -188,7 +188,7 @@ export default function PreMatricula() {
         necessidadesEspecificas,
       });
       setSucesso(true);
-    } catch (err) {
+    } catch {
       setErro("Ocorreu um erro ao enviar. Tente novamente.");
     } finally {
       setLoading(false);

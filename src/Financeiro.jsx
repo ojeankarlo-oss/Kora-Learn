@@ -37,7 +37,7 @@ function seloInfo(sit, T) {
   return { label: "Em aberto", bg: T?.amberSoft || "#FBEFDA", fg: T?.ink || "#10201A", Icon: Clock };
 }
 
-export default function Financeiro({ perfil, T }) {
+export default function Financeiro({ T }) {
   const [titulos, setTitulos] = useState(null);
   const [erro, setErro] = useState("");
 

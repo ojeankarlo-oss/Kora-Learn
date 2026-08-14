@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { BookOpen, Send, Loader2, Inbox, AlertTriangle, RefreshCw } from "lucide-react";
+import { BookOpen, Send, Loader2, AlertTriangle, RefreshCw } from "lucide-react";
 import { criarChamado, meusChamados } from "./lib/api";
 
 const SITUACAO_INFO = {
@@ -44,16 +44,16 @@ export default function Pedagogico({ T, toast }) {
 
   const enviar = async (e) => {
     e.preventDefault();
-    if (!assunto.trim()) { toast && toast("Informe o assunto da solicitação"); return; }
+    if (!assunto.trim()) { toast?.("Informe o assunto da solicitação"); return; }
     setEnviando(true);
     try {
       await criarChamado({ tipo: "material_pedagogico", assunto: assunto.trim(), detalhes: detalhes.trim() });
-      toast && toast("Solicitação enviada ✓");
+      toast?.("Solicitação enviada ✓");
       setAssunto(""); setDetalhes("");
       await carregar();
     } catch (e2) {
       console.error(e2);
-      toast && toast("Erro ao enviar solicitação");
+      toast?.("Erro ao enviar solicitação");
     } finally {
       setEnviando(false);
     }

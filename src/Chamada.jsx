@@ -38,7 +38,7 @@ function resumoPresencas(presencas) {
   return partes.length ? partes.join(", ") : "Sem registros de presença";
 }
 
-export default function Chamada({ perfil, toast, T }) {
+export default function Chamada({ toast, T }) {
   const [turmas, setTurmas] = useState(null);
   const [turmasErro, setTurmasErro] = useState("");
   const [turmaId, setTurmaId] = useState("");

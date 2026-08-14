@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Link2, Trash2, RefreshCw, AlertTriangle, Loader2, UserCog } from "lucide-react";
+import { Link2, Trash2, RefreshCw, Loader2, UserCog } from "lucide-react";
 import {
   listarVinculosProfessorTurma, listarProfessores, listarTurmasAtivas,
   vincularProfessorTurma, desvincularProfessorTurma,
@@ -9,7 +9,7 @@ import {
 // -> "Dar acesso de professor" / "Vincular às turmas"), que chega aqui com
 // professorPreSelecionado ja preenchido. Esta tela passa a servir so para
 // GERENCIAR vinculos ja criados (vincular a mais turmas, listar, desvincular).
-export default function VinculosProfessorTurma({ T, toast, perfil, professorPreSelecionado }) {
+export default function VinculosProfessorTurma({ T, toast, professorPreSelecionado }) {
   const [vinculos, setVinculos] = useState(null);
   const [erro, setErro] = useState("");
   const [professores, setProfessores] = useState([]);

@@ -40,7 +40,7 @@ export default function DocumentosAlunoModal({ aluno, toast, T, onClose, onChang
       window.open(url, "_blank", "noopener,noreferrer");
     } catch (e) {
       console.error(e);
-      toast && toast("Não foi possível abrir o documento.");
+      toast?.("Não foi possível abrir o documento.");
     } finally {
       setUrlCarregando(null);
     }
@@ -50,12 +50,12 @@ export default function DocumentosAlunoModal({ aluno, toast, T, onClose, onChang
     setProcessando(doc.id);
     try {
       await avaliarDocumento(doc.id, "aprovado", null);
-      toast && toast("Documento aprovado.");
+      toast?.("Documento aprovado.");
       await carregar();
-      onChange && onChange();
+      onChange?.();
     } catch (e) {
       console.error(e);
-      toast && toast("Erro ao aprovar documento.");
+      toast?.("Erro ao aprovar documento.");
     } finally {
       setProcessando(null);
     }
@@ -65,18 +65,18 @@ export default function DocumentosAlunoModal({ aluno, toast, T, onClose, onChang
     const motivo = window.prompt("Motivo da recusa (visível para o aluno):", "");
     if (motivo === null) return;
     if (!motivo.trim()) {
-      toast && toast("Informe um motivo para solicitar o reenvio.");
+      toast?.("Informe um motivo para solicitar o reenvio.");
       return;
     }
     setProcessando(doc.id);
     try {
       await avaliarDocumento(doc.id, "reprovado", motivo.trim());
-      toast && toast("Reenvio solicitado ao aluno.");
+      toast?.("Reenvio solicitado ao aluno.");
       await carregar();
-      onChange && onChange();
+      onChange?.();
     } catch (e) {
       console.error(e);
-      toast && toast("Erro ao solicitar reenvio.");
+      toast?.("Erro ao solicitar reenvio.");
     } finally {
       setProcessando(null);
     }

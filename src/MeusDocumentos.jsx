@@ -92,13 +92,13 @@ export default function MeusDocumentos({ perfil, toast, T }) {
     setEnviandoSolicitacao(true);
     try {
       await criarChamado({ tipo: "documento", assunto: tipoSolicitacao, detalhes: observacaoSolicitacao.trim() });
-      toast && toast("Solicitação enviada ✓");
+      toast?.("Solicitação enviada ✓");
       setObservacaoSolicitacao("");
       setMostrarFormSolicitacao(false);
       await carregarSolicitacoes();
     } catch (err) {
       console.error(err);
-      toast && toast("Erro ao enviar solicitação");
+      toast?.("Erro ao enviar solicitação");
     } finally {
       setEnviandoSolicitacao(false);
     }
@@ -116,11 +116,11 @@ export default function MeusDocumentos({ perfil, toast, T }) {
 
     const tipoOk = file.type === "application/pdf" || file.type.startsWith("image/");
     if (!tipoOk) {
-      toast && toast("Envie um arquivo PDF ou imagem.");
+      toast?.("Envie um arquivo PDF ou imagem.");
       return;
     }
     if (file.size > TAMANHO_MAXIMO) {
-      toast && toast("Arquivo muito grande. O limite é 10MB.");
+      toast?.("Arquivo muito grande. O limite é 10MB.");
       return;
     }
 
@@ -132,11 +132,11 @@ export default function MeusDocumentos({ perfil, toast, T }) {
         tipo,
         file,
       });
-      toast && toast("Documento enviado! Aguarde a análise.");
+      toast?.("Documento enviado! Aguarde a análise.");
       await carregar();
     } catch (err) {
       console.error(err);
-      toast && toast("Erro ao enviar documento. Tente novamente.");
+      toast?.("Erro ao enviar documento. Tente novamente.");
     } finally {
       setEnviando(false);
     }
@@ -149,7 +149,7 @@ export default function MeusDocumentos({ perfil, toast, T }) {
       window.open(url, "_blank", "noopener,noreferrer");
     } catch (e) {
       console.error(e);
-      toast && toast("Não foi possível abrir o documento.");
+      toast?.("Não foi possível abrir o documento.");
     } finally {
       setUrlCarregando(null);
     }

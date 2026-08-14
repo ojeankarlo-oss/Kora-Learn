@@ -45,7 +45,7 @@ export default function ContratoConfig({ T, toast }) {
     setSalvando(true);
     try {
       await salvarContrato(texto);
-      toast && toast("Nova versão do contrato salva!");
+      toast?.("Nova versão do contrato salva!");
       const contrato = await contratoAtivo();
       if (contrato) {
         setPersonalizado(true);
@@ -53,7 +53,7 @@ export default function ContratoConfig({ T, toast }) {
       }
     } catch (e) {
       console.error(e);
-      toast && toast("Erro ao salvar o contrato.");
+      toast?.("Erro ao salvar o contrato.");
     } finally {
       setSalvando(false);
     }

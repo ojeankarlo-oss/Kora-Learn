@@ -3,15 +3,16 @@
 // Salvar em: src/App.jsx  (projeto Vite React)
 // Depende de: src/lib/supabaseClient.js e src/lib/api.js
 // ============================================================
-import React, { useState, useEffect, useCallback, useRef, createContext, useContext } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
-  Home, PlayCircle, BookOpen, Bell, ChevronRight, ChevronDown, CheckCircle2, Lock,
-  Flame, Trophy, Star, Users, AlertTriangle, LogOut, GraduationCap,
-  FileText, Clock, TrendingUp, Loader2, Inbox, UserPlus, RefreshCw,
-  Eye, EyeOff, MapPin, Building2, Wallet, HeartHandshake
+  Home, PlayCircle, ChevronRight, ChevronDown, CheckCircle2,
+  Users, AlertTriangle, LogOut, GraduationCap,
+  FileText, TrendingUp, Loader2, Inbox, UserPlus, RefreshCw,
+  Eye, EyeOff, MapPin, Wallet, HeartHandshake
 } from "lucide-react";
 import { supabase } from "./lib/supabaseClient";
 import { TEMA_PADRAO, montarTema, aplicarAcessibilidade } from "./theme";
+import { TemaContext, useTema } from "./TemaContexto";
 import ControleAcessibilidade from "./AcessibilidadeControle";
 import PreMatricula from "./PreMatricula";
 import PrimeiroAcesso from "./PrimeiroAcesso";
@@ -37,18 +38,13 @@ import {
   entrarComEmail, sair, meuPerfil, meusCursos, concluirAula, meuStatusOnboarding,
   kpisDoTenant, listarLeads, listarCursos, converterLead,
   listarMatriculas, atualizarSituacaoMatricula, meuTenant, salvarConfigTenant,
-  listarUnidades, criarUnidade, alternarUnidade, listarUnidadesPublico,
-  contratoAtivo, meusAceites, registrarAceite, salvarContrato,
-  enviarDocumento, meusDocumentos, documentosDoTenant, avaliarDocumento, urlDocumento,
+  listarUnidades, criarUnidade, alternarUnidade,
+  contratoAtivo, meusAceites,
+  documentosDoTenant,
   salvarPreferenciasAcessibilidade,
 } from "./lib/api";
 
 /* ---------- Contexto de tema (white-label) ---------- */
-const TemaContext = createContext(TEMA_PADRAO);
-
-export function useTema() {
-  return useContext(TemaContext);
-}
 
 /* ---------- Identidade visual (padrão) ---------- */
 const T = TEMA_PADRAO;
@@ -329,7 +325,7 @@ function RecuperarSenhaScreen() {
       });
       setSucesso("Se este e-mail estiver cadastrado, enviamos um link de recuperação. Verifique também o spam.");
       setEmail("");
-    } catch (error) {
+    } catch {
       setSucesso("Se este e-mail estiver cadastrado, enviamos um link de recuperação. Verifique também o spam.");
     } finally {
       setLoading(false);
@@ -480,7 +476,7 @@ function RedefinirSenhaScreen({ onLogged }) {
           window.location.hash = "#/";
         }
       }, 900);
-    } catch (error) {
+    } catch {
       setErro("Não foi possível redefinir a senha. Solicite um novo link e tente novamente.");
     } finally {
       setLoading(false);
@@ -1119,11 +1115,6 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
     return nome.includes(termo) || email.includes(termo);
   });
 
-  const totaisPorSituacao = matriculas.reduce((acc, m) => {
-    acc[m.situacao] = (acc[m.situacao] ?? 0) + 1;
-    return acc;
-  }, {});
-
   const badgeStyle = (situacao) => {
     switch (situacao) {
       case "ativa":
@@ -1688,6 +1679,21 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
   );
 }
 
+function AcessoNegadoScreen({ perfil, onLogout }) {
+  const T = useTema();
+  return (
+    <div style={{ minHeight: "70vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, padding: 24, textAlign: "center" }}>
+      <AlertTriangle size={28} color={T.danger} />
+      <div style={{ fontSize: 14, color: T.ink, maxWidth: 360 }}>
+        O perfil <strong>{perfil?.perfil || "atual"}</strong> não possui uma área disponível nesta versão da plataforma.
+      </div>
+      <button onClick={onLogout} style={{ padding: "10px 20px", borderRadius: 12, border: "none", background: T.forest, color: "#fff", fontWeight: 600 }}>
+        Sair
+      </button>
+    </div>
+  );
+}
+
 /* ============================================================
    RAIZ — sessão e roteamento por perfil
    ============================================================ */
@@ -1865,7 +1871,9 @@ export default function App() {
             ? <GestorApp perfil={perfil} onLogout={logout} toast={toast} setTema={setTemaBase} />
             : perfil.perfil === "professor"
               ? <ProfessorApp perfil={perfil} onLogout={logout} toast={toast} T={tema} />
-              : <AlunoApp perfil={perfil} onLogout={logout} toast={toast} />
+              : perfil.perfil === "aluno"
+                ? <AlunoApp perfil={perfil} onLogout={logout} toast={toast} />
+                : <AcessoNegadoScreen perfil={perfil} onLogout={logout} />
         )}
 
         <Toast msg={toastMsg} />

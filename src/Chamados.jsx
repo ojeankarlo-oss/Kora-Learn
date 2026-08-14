@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { X, MessageSquare, Send, AlertTriangle, CheckCircle2, Loader2, RefreshCw, Inbox } from "lucide-react";
+import { X, MessageSquare, Send, AlertTriangle, Loader2, RefreshCw, Inbox } from "lucide-react";
 import { listarChamados, atualizarSituacaoChamado, mensagensDoChamado, enviarMensagemChamado } from "./lib/api";
 
 const TIPO_LABELS = {
@@ -72,7 +72,7 @@ function ChamadoDetalhe({ chamado, T, toast, onClose, onAtualizado }) {
       await carregarMensagens();
     } catch (e) {
       console.error(e);
-      toast && toast("Erro ao enviar mensagem");
+      toast?.("Erro ao enviar mensagem");
     } finally {
       setEnviando(false);
     }
@@ -82,11 +82,11 @@ function ChamadoDetalhe({ chamado, T, toast, onClose, onAtualizado }) {
     setMudandoSituacao(true);
     try {
       await atualizarSituacaoChamado(chamado.id, novaSituacao);
-      toast && toast("Situação atualizada");
+      toast?.("Situação atualizada");
       onAtualizado(novaSituacao);
     } catch (e) {
       console.error(e);
-      toast && toast("Erro ao atualizar a situação do chamado");
+      toast?.("Erro ao atualizar a situação do chamado");
     } finally {
       setMudandoSituacao(false);
     }

@@ -75,7 +75,19 @@ export default function AceiteScreen({ perfil, curso, toast, T, onAceito }) {
       }
     })();
     return () => { ativo = false; };
-  }, [perfil?.id, tentativa]);
+  }, [
+    perfil?.id,
+    perfil?.nome,
+    perfil?.cpf,
+    perfil?.email,
+    curso?.nome,
+    curso?.carga_horaria,
+    curso?.modalidade,
+    curso?.unidade?.nome,
+    curso?.valor_total,
+    curso?.condicoes_pagamento,
+    tentativa,
+  ]);
 
   const podeAceitar = lgpdChecked && contratoChecked && !enviando && !carregando && !erroCarga;
 
@@ -93,8 +105,8 @@ export default function AceiteScreen({ perfil, curso, toast, T, onAceito }) {
         versao: contratoInfo.versao,
         hash: hashContrato,
       });
-      toast && toast("Aceite registrado! Bem-vindo(a).");
-      onAceito && onAceito();
+      toast?.("Aceite registrado! Bem-vindo(a).");
+      onAceito?.();
     } catch (e) {
       console.error(e);
       setErroEnvio("Não foi possível registrar seu aceite. Verifique sua conexão e tente novamente.");

@@ -7,6 +7,7 @@
     "dev": "vite --host",
     "build": "vite build",
     "lint": "oxlint",
+    "check:encoding": "node scripts/check-utf8.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
