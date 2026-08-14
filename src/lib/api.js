@@ -1055,6 +1055,123 @@ export async function cancelarTitulo(tituloId, observacao) {
   return data;
 }
 
+/* ---------------- AVALIACOES E PROVAS (FASE 19) ---------------- */
+export async function avaliacoesDisponiveisAluno() {
+  const { data, error } = await supabase.rpc("avaliacoes_disponiveis_aluno");
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function iniciarTentativaAvaliacao(avaliacaoId, matriculaId) {
+  const { data, error } = await supabase.rpc("iniciar_tentativa_avaliacao", {
+    p_avaliacao_id: avaliacaoId,
+    p_matricula_id: matriculaId,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function enviarTentativaAvaliacao(tentativaId, respostas) {
+  const { data, error } = await supabase.rpc("enviar_tentativa_avaliacao", {
+    p_tentativa_id: tentativaId,
+    p_respostas: respostas,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function listarQuestoesDisciplina(disciplinaId) {
+  const { data, error } = await supabase
+    .from("questoes")
+    .select("id, disciplina_id, enunciado, tipo, dificuldade, alternativas, resposta_correta, pontos, ativa")
+    .eq("disciplina_id", disciplinaId)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function criarQuestao({ tenantId, disciplinaId, enunciado, tipo, dificuldade, alternativas, respostaCorreta, pontos }) {
+  const { data, error } = await supabase.from("questoes").insert({
+    tenant_id: tenantId,
+    disciplina_id: disciplinaId,
+    enunciado,
+    tipo,
+    dificuldade,
+    alternativas: alternativas ?? [],
+    resposta_correta: respostaCorreta || null,
+    pontos: Number(pontos) || 1,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function listarAvaliacoesDisciplina(disciplinaId) {
+  const { data, error } = await supabase
+    .from("avaliacoes")
+    .select("id, curso_id, disciplina_id, turma_id, titulo, descricao, situacao, modo_aplicacao, regra_liberacao, intervalo_dias, tentativas_permitidas, nota_minima, expira_em_dias, quantidade_questoes, disponivel_em, avaliacao_questoes(questao_id, ordem)")
+    .eq("disciplina_id", disciplinaId)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function criarAvaliacao({ tenantId, cursoId, disciplinaId, turmaId, titulo, descricao, modoAplicacao, regraLiberacao, intervaloDias, tentativasPermitidas, notaMinima, expiraEmDias, quantidadeQuestoes, disponivelEm, criadoPor }) {
+  const { data, error } = await supabase.from("avaliacoes").insert({
+    tenant_id: tenantId,
+    curso_id: cursoId,
+    disciplina_id: disciplinaId,
+    turma_id: turmaId || null,
+    titulo,
+    descricao: descricao || null,
+    modo_aplicacao: modoAplicacao,
+    regra_liberacao: regraLiberacao,
+    intervalo_dias: Number(intervaloDias) || 0,
+    tentativas_permitidas: Number(tentativasPermitidas) || 1,
+    nota_minima: Number(notaMinima) || 60,
+    expira_em_dias: expiraEmDias ? Number(expiraEmDias) : null,
+    quantidade_questoes: quantidadeQuestoes ? Number(quantidadeQuestoes) : null,
+    disponivel_em: disponivelEm || null,
+    criado_por: criadoPor || null,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function vincularQuestoesAvaliacao(avaliacaoId, questoes) {
+  const registros = (questoes ?? []).map((questaoId, index) => ({ avaliacao_id: avaliacaoId, questao_id: questaoId, ordem: index }));
+  const { error: limparError } = await supabase.from("avaliacao_questoes").delete().eq("avaliacao_id", avaliacaoId);
+  if (limparError) throw limparError;
+  if (registros.length === 0) return [];
+  const { data, error } = await supabase.from("avaliacao_questoes").insert(registros).select();
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function atualizarSituacaoAvaliacao(avaliacaoId, situacao) {
+  const { data, error } = await supabase.from("avaliacoes").update({ situacao }).eq("id", avaliacaoId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function tentativasAvaliacao(avaliacaoId) {
+  const { data, error } = await supabase
+    .from("avaliacao_tentativas")
+    .select("id, avaliacao_id, matricula_id, usuario_id, numero_tentativa, situacao, iniciada_em, enviada_em, nota, nota_maxima, percentual, aprovada, avaliacao_respostas(id, questao_id, resposta_texto, alternativa_id, pontos_obtidos, corrigida, comentario)")
+    .eq("avaliacao_id", avaliacaoId)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function corrigirRespostaAvaliacao(respostaId, pontos, comentario) {
+  const { data, error } = await supabase.rpc("corrigir_resposta_avaliacao", {
+    p_resposta_id: respostaId,
+    p_pontos: pontos,
+    p_comentario: comentario || null,
+  });
+  if (error) throw error;
+  return data;
+}
 /* ---------------- PROFESSOR (turmas, materiais, avisos) ---------------- */
 
 // Junta cada turma retornada pela RPC com a primeira disciplina do curso
@@ -1065,7 +1182,7 @@ async function enriquecerTurmasProfessorComDisciplina(turmasRpc) {
 
   const { data, error } = await supabase
     .from("turmas")
-    .select("id, curso:cursos(disciplinas(id, nome, ordem))")
+    .select("id, curso:cursos(id, nome, disciplinas(id, nome, ordem))")
     .in("id", turmaIds);
   if (error) throw error;
 
@@ -1078,6 +1195,7 @@ async function enriquecerTurmasProfessorComDisciplina(turmasRpc) {
   return turmasRpc.map((t) => ({
     turmaId: t.turma_id,
     turmaNome: t.turma_nome,
+    cursoId: (data ?? []).find((turma) => turma.id === t.turma_id)?.curso?.id ?? null,
     cursoNome: t.curso_nome,
     disciplinaId: disciplinaPorTurma[t.turma_id]?.id ?? null,
     disciplinaNome: disciplinaPorTurma[t.turma_id]?.nome ?? "",

@@ -1,13 +1,14 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   ChevronRight, ChevronLeft, FileText, Link2, Video, Book,
-  Bell, ClipboardList, Plus, Trash2, RefreshCw, Loader2, AlertTriangle, LogOut, Inbox,
+  Bell, ClipboardList, FileQuestion, Plus, Trash2, RefreshCw, Loader2, AlertTriangle, LogOut, Inbox,
 } from "lucide-react";
 import {
   minhasTurmasProfessor, materiaisDaTurma, publicarMaterial, removerMaterial,
   avisosDaTurma, criarAvisoTurma, removerAvisoTurma,
 } from "./lib/api";
 import Chamada from "./Chamada";
+import AvaliacoesProfessor from "./AvaliacoesProfessor";
 
 const TIPOS_MATERIAL = [
   { value: "artigo", label: "Artigo" },
@@ -414,6 +415,7 @@ export default function ProfessorApp({ perfil, onLogout, toast, T }) {
     { id: "materiais", label: "Materiais", icon: FileText },
     { id: "avisos", label: "Agenda", icon: Bell },
     { id: "chamada", label: "Chamada", icon: ClipboardList },
+    { id: "avaliacoes", label: "Avaliações", icon: FileQuestion },
   ];
 
   return (
@@ -485,6 +487,9 @@ export default function ProfessorApp({ perfil, onLogout, toast, T }) {
             )}
             {aba === "chamada" && (
               <Chamada perfil={perfil} toast={toast} T={T} />
+            )}
+            {aba === "avaliacoes" && (
+              <AvaliacoesProfessor perfil={perfil} turma={turmaSelecionada} T={T} toast={toast} />
             )}
           </>
         )}

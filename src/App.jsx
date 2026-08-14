@@ -8,7 +8,7 @@ import {
   Home, PlayCircle, ChevronRight, ChevronDown, CheckCircle2,
   Users, AlertTriangle, LogOut, GraduationCap,
   FileText, TrendingUp, Loader2, Inbox, UserPlus, RefreshCw,
-  Eye, EyeOff, MapPin, Wallet, HeartHandshake
+  Eye, EyeOff, MapPin, Wallet, HeartHandshake, ClipboardCheck
 } from "lucide-react";
 import { supabase } from "./lib/supabaseClient";
 import { TEMA_PADRAO, montarTema, aplicarAcessibilidade } from "./theme";
@@ -33,6 +33,7 @@ import Chamados from "./Chamados";
 import Pedagogico from "./Pedagogico";
 import ProfessorApp from "./ProfessorApp";
 import MateriaisAvisosAluno from "./MateriaisAvisosAluno";
+import AvaliacoesAluno from "./AvaliacoesAluno";
 import { CONTRATO_PADRAO_VERSAO } from "./contratoPadrao";
 import {
   entrarComEmail, sair, meuPerfil, meusCursos, concluirAula, meuStatusOnboarding,
@@ -847,6 +848,10 @@ function AlunoApp({ perfil, onLogout, toast }) {
           <Financeiro perfil={perfil} T={T} />
         )}
 
+        {tab === "avaliacoes" && T.modulos?.avaliacoes !== false && (
+          <AvaliacoesAluno T={T} toast={toast} />
+        )}
+
         {/* Bottom nav */}
       {curso && (
         <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 40, background: "#fff", borderTop: `1px solid ${T.line}`, display: "flex", justifyContent: "space-around", padding: "8px 8px calc(8px + env(safe-area-inset-bottom))" }}>
@@ -855,6 +860,7 @@ function AlunoApp({ perfil, onLogout, toast }) {
             { id: "player", label: "Aulas", icon: PlayCircle },
         ...(T.modulos?.documentos ? [{ id: "documentos", label: "Documentos", icon: FileText }] : []),
               ...(T.modulos?.financeiro ? [{ id: "financeiro", label: "Financeiro", icon: Wallet }] : []),
+              ...(T.modulos?.avaliacoes !== false ? [{ id: "avaliacoes", label: "Provas", icon: ClipboardCheck }] : []),
           ].map(({ id, label, icon: Icon }) => {
             const active = tab === id;
             return (
@@ -1537,7 +1543,7 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
               {/* Módulos */}
               <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${T.line}` }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: T.ink, marginBottom: 12 }}>Módulos</div>
-                {["inscricao_publica", "alunos", "documentos"].map((modulo) => (
+                {["inscricao_publica", "alunos", "documentos", "avaliacoes"].map((modulo) => (
                   <label key={modulo} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, cursor: "pointer" }}>
                     <input
                       type="checkbox"
@@ -1546,7 +1552,7 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
                       style={{ cursor: "pointer" }}
                     />
                     <span style={{ fontSize: 13, color: T.ink }}>
-                      {modulo === "inscricao_publica" ? "Inscrição pública" : modulo === "alunos" ? "Alunos" : modulo === "documentos" ? "Documentos" : modulo}
+                      {modulo === "inscricao_publica" ? "Inscrição pública" : modulo === "alunos" ? "Alunos" : modulo === "documentos" ? "Documentos" : modulo === "avaliacoes" ? "Avaliações e provas" : modulo}
                     </span>
                   </label>
                 ))}
