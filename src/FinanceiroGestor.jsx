@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Wallet, TrendingUp, AlertTriangle, CheckCircle2, Clock, XCircle, RefreshCw, Loader2 } from "lucide-react";
-import { kpisFinanceiro, listarMatriculas, gerarMensalidades, listarTitulos, darBaixaTitulo, cancelarTitulo } from "./lib/api";
+import { Wallet, TrendingUp, AlertTriangle, CheckCircle2, Clock, XCircle, RefreshCw, Loader2, QrCode, Copy, ExternalLink, X } from "lucide-react";
+import QRCode from "qrcode";
+import { kpisFinanceiro, listarMatriculas, gerarMensalidades, listarTitulos, darBaixaTitulo, cancelarTitulo, gerarPixTitulo } from "./lib/api";
 
 const brl = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 const FORMAS = ["Pix", "Dinheiro", "Cartão", "Boleto", "Outro"];
@@ -57,6 +58,10 @@ export default function FinanceiroGestor({ perfil, toast, T }) {
   const [busca, setBusca] = useState("");
   const [salvando, setSalvando] = useState(false);
   const [baixando, setBaixando] = useState(null);
+  const [pixCarregando, setPixCarregando] = useState(null);
+  const [pixAberto, setPixAberto] = useState(null);
+  const [pixQrDataUrl, setPixQrDataUrl] = useState("");
+  const [pixCopiado, setPixCopiado] = useState(false);
 
   // Formulario de mensalidades
   const [matriculaId, setMatriculaId] = useState("");
@@ -106,6 +111,19 @@ export default function FinanceiroGestor({ perfil, toast, T }) {
   useEffect(() => { carregarKpis(); }, [carregarKpis]);
   useEffect(() => { carregarMatriculas(); }, [carregarMatriculas]);
   useEffect(() => { carregarTitulos(); }, [carregarTitulos]);
+
+  useEffect(() => {
+    let ativo = true;
+    setPixCopiado(false);
+    if (!pixAberto?.pix_copia_e_cola) {
+      setPixQrDataUrl("");
+      return () => { ativo = false; };
+    }
+    QRCode.toDataURL(pixAberto.pix_copia_e_cola, { width: 240, margin: 2, errorCorrectionLevel: "M" })
+      .then((url) => { if (ativo) setPixQrDataUrl(url); })
+      .catch((e) => { console.error(e); if (ativo) setPixQrDataUrl(""); });
+    return () => { ativo = false; };
+  }, [pixAberto]);
 
   async function gerarParcelas() {
     const m = matriculas.find((x) => String(x.id) === String(matriculaId));
@@ -167,6 +185,33 @@ export default function FinanceiroGestor({ perfil, toast, T }) {
       toast?.("Erro ao cancelar.");
     } finally {
       setBaixando(null);
+    }
+  }
+
+  async function abrirPix(t) {
+    setPixCarregando(t.id);
+    try {
+      const resposta = await gerarPixTitulo(t.id);
+      if (!resposta?.cobranca) throw new Error("Cobrança Pix não retornada");
+      setPixAberto({ ...resposta.cobranca, titulo: t });
+      toast?.(resposta.reutilizada ? "Cobrança Pix já existente." : "Cobrança Pix criada ✓");
+    } catch (e) {
+      console.error(e);
+      toast?.(e?.message || "Não foi possível gerar o Pix.");
+    } finally {
+      setPixCarregando(null);
+    }
+  }
+
+  async function copiarPix() {
+    if (!pixAberto?.pix_copia_e_cola) return;
+    try {
+      await navigator.clipboard.writeText(pixAberto.pix_copia_e_cola);
+      setPixCopiado(true);
+      toast?.("Código Pix copiado.");
+    } catch (e) {
+      console.error(e);
+      toast?.("Não foi possível copiar automaticamente.");
     }
   }
 
@@ -289,8 +334,11 @@ export default function FinanceiroGestor({ perfil, toast, T }) {
                   </span>
                   {podeAgir && (
                     <div style={{ display: "flex", gap: 6 }}>
-                      <button onClick={() => baixar(t)} disabled={baixando === t.id} style={{ background: T?.forest || "#17604A", color: "#fff", border: "none", borderRadius: 999, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Dar baixa</button>
-                      <button onClick={() => cancelar(t)} disabled={baixando === t.id} style={{ background: "none", color: T?.danger || "#C24A3F", border: `1px solid ${T?.line}`, borderRadius: 999, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
+                      <button onClick={() => abrirPix(t)} disabled={pixCarregando === t.id || baixando === t.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: T?.amber || "#E9A13B", color: T?.forestDark || "#10201A", border: "none", borderRadius: 999, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                        {pixCarregando === t.id ? <Loader2 size={12} className="kl-spin" /> : <QrCode size={12} />} Pix
+                      </button>
+                      <button onClick={() => baixar(t)} disabled={baixando === t.id || pixCarregando === t.id} style={{ background: T?.forest || "#17604A", color: "#fff", border: "none", borderRadius: 999, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Dar baixa</button>
+                      <button onClick={() => cancelar(t)} disabled={baixando === t.id || pixCarregando === t.id} style={{ background: "none", color: T?.danger || "#C24A3F", border: `1px solid ${T?.line}`, borderRadius: 999, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
                     </div>
                   )}
                 </div>
@@ -299,6 +347,27 @@ export default function FinanceiroGestor({ perfil, toast, T }) {
           </div>
         )}
       </div>
+
+      {pixAberto && (
+        <div role="dialog" aria-modal="true" aria-label="Cobrança Pix" onClick={() => setPixAberto(null)} style={{ position: "fixed", inset: 0, zIndex: 100, background: "#10201A99", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ ...box, width: "min(100%, 420px)", maxHeight: "90vh", overflow: "auto", margin: 0, position: "relative" }}>
+            <button onClick={() => setPixAberto(null)} aria-label="Fechar" style={{ position: "absolute", top: 12, right: 12, border: "none", background: "none", color: T?.muted, cursor: "pointer" }}><X size={18} /></button>
+            <div style={{ fontSize: 16, fontWeight: 800, color: T?.ink, paddingRight: 28 }}>Pix para {pixAberto.titulo?.aluno?.nome || "o título"}</div>
+            <div style={{ fontSize: 12, color: T?.muted, marginTop: 4 }}>{pixAberto.titulo?.descricao} · {formatarCentavos(pixAberto.valor_centavos)}</div>
+            {pixQrDataUrl ? (
+              <div style={{ display: "flex", justifyContent: "center", margin: "18px 0 12px" }}><img src={pixQrDataUrl} alt="QR Code Pix" width="240" height="240" style={{ borderRadius: 10, border: `1px solid ${T?.line}` }} /></div>
+            ) : (
+              <div style={{ marginTop: 18, padding: 14, borderRadius: 10, background: T?.paper, color: T?.muted, fontSize: 12 }}>O payload do QR Code não foi retornado pelo provedor. Use o código abaixo ou abra a location.</div>
+            )}
+            <label style={rotulo}>Pix copia e cola / payload</label>
+            <textarea readOnly value={pixAberto.pix_copia_e_cola || ""} rows={4} style={{ ...campo, resize: "vertical", fontFamily: "monospace", fontSize: 11 }} />
+            <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+              <button onClick={copiarPix} disabled={!pixAberto.pix_copia_e_cola} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T?.forest, color: "#fff", border: "none", borderRadius: 999, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}><Copy size={13} /> {pixCopiado ? "Copiado" : "Copiar código"}</button>
+              {pixAberto.location && <a href={pixAberto.location.startsWith("http") ? pixAberto.location : `https://${pixAberto.location}`} target="_blank" rel="noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 6, border: `1px solid ${T?.line}`, color: T?.ink, textDecoration: "none", borderRadius: 999, padding: "8px 14px", fontSize: 12, fontWeight: 700 }}><ExternalLink size={13} /> Abrir location</a>}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

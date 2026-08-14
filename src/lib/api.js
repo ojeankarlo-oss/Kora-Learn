@@ -964,6 +964,26 @@ export async function listarTitulos({ situacao, busca } = {}) {
   return lista;
 }
 
+// Solicita a cobrança Pix no backend seguro; o frontend nunca recebe credenciais do PSP.
+export async function gerarPixTitulo(tituloId) {
+  const { data, error } = await supabase.functions.invoke("pix-create", {
+    body: { tituloId },
+  });
+  if (error) throw error;
+  if (data?.erro) throw new Error(data.erro);
+  return data;
+}
+
+// Consulta as cobranças Pix do usuário logado. A RLS da migration 016 restringe os títulos próprios.
+export async function meusPix() {
+  const { data, error } = await supabase
+    .from("pix_cobrancas")
+    .select("id, titulo_id, txid, location, pix_copia_e_cola, situacao, valor_centavos, expira_em, paga_em")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
 // Gera N titulos de mensalidade em um unico insert.
 export async function gerarMensalidades({ matriculaId, usuarioId, tenantId, cursoNome, valorCentavos, parcelas, diaVencimento, primeiraCompetencia }) {
   const n = Number(parcelas) || 0;

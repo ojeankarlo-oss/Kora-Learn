@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Wallet, CheckCircle2, AlertTriangle, Clock, XCircle, RefreshCw, Loader2 } from "lucide-react";
-import { meusTitulos } from "./lib/api";
+import { Wallet, CheckCircle2, AlertTriangle, Clock, XCircle, RefreshCw, Loader2, QrCode, Copy, ExternalLink, X } from "lucide-react";
+import QRCode from "qrcode";
+import { meusTitulos, gerarPixTitulo } from "./lib/api";
 
 const brl = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 
@@ -40,6 +41,10 @@ function seloInfo(sit, T) {
 export default function Financeiro({ T }) {
   const [titulos, setTitulos] = useState(null);
   const [erro, setErro] = useState("");
+  const [pixCarregando, setPixCarregando] = useState(null);
+  const [pixAberto, setPixAberto] = useState(null);
+  const [pixQrDataUrl, setPixQrDataUrl] = useState("");
+  const [pixCopiado, setPixCopiado] = useState(false);
 
   const carregar = useCallback(async () => {
     try {
@@ -54,6 +59,44 @@ export default function Financeiro({ T }) {
   }, []);
 
   useEffect(() => { carregar(); }, [carregar]);
+
+  useEffect(() => {
+    let ativo = true;
+    setPixCopiado(false);
+    if (!pixAberto?.pix_copia_e_cola) {
+      setPixQrDataUrl("");
+      return () => { ativo = false; };
+    }
+    QRCode.toDataURL(pixAberto.pix_copia_e_cola, { width: 240, margin: 2, errorCorrectionLevel: "M" })
+      .then((url) => { if (ativo) setPixQrDataUrl(url); })
+      .catch((e) => { console.error(e); if (ativo) setPixQrDataUrl(""); });
+    return () => { ativo = false; };
+  }, [pixAberto]);
+
+  async function abrirPix(titulo) {
+    setPixCarregando(titulo.id);
+    try {
+      const resposta = await gerarPixTitulo(titulo.id);
+      if (!resposta?.cobranca) throw new Error("Cobrança Pix não retornada");
+      setPixAberto({ ...resposta.cobranca, titulo });
+    } catch (e) {
+      console.error(e);
+      setErro(e?.message || "Não foi possível gerar o Pix.");
+    } finally {
+      setPixCarregando(null);
+    }
+  }
+
+  async function copiarPix() {
+    if (!pixAberto?.pix_copia_e_cola) return;
+    try {
+      await navigator.clipboard.writeText(pixAberto.pix_copia_e_cola);
+      setPixCopiado(true);
+    } catch (e) {
+      console.error(e);
+      setErro("Não foi possível copiar automaticamente.");
+    }
+  }
 
   // Proximo vencimento: primeiro titulo aberto com vencimento hoje ou futuro.
   const proximo = (titulos || [])
@@ -134,6 +177,11 @@ export default function Financeiro({ T }) {
                 <span style={{ ...estilos.selo, background: selo.bg, color: selo.fg, marginTop: 6 }}>
                   <SeloIcon size={12} /> {selo.label}
                 </span>
+                {t.situacao === "aberto" && (
+                  <button onClick={() => abrirPix(t)} disabled={pixCarregando === t.id} style={{ display: "inline-flex", alignItems: "center", gap: 4, marginTop: 8, background: T?.forest || "#17604A", color: "#fff", border: "none", borderRadius: 999, padding: "6px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                    {pixCarregando === t.id ? <Loader2 size={12} className="kl-spin" /> : <QrCode size={12} />} Pagar com Pix
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -141,6 +189,22 @@ export default function Financeiro({ T }) {
       })}
 
       <div style={estilos.rodape}>Em caso de dúvida, fale com a secretaria.</div>
+
+      {pixAberto && (
+        <div role="dialog" aria-modal="true" aria-label="Pagamento Pix" onClick={() => setPixAberto(null)} style={{ position: "fixed", inset: 0, zIndex: 100, background: "#10201A99", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ ...estilos.card, width: "min(100%, 420px)", maxHeight: "90vh", overflow: "auto", margin: 0, position: "relative" }}>
+            <button onClick={() => setPixAberto(null)} aria-label="Fechar" style={{ position: "absolute", top: 12, right: 12, border: "none", background: "none", color: T?.muted, cursor: "pointer" }}><X size={18} /></button>
+            <div style={{ fontSize: 16, fontWeight: 800, color: T?.ink, paddingRight: 28 }}>Pagar com Pix</div>
+            <div style={{ fontSize: 12, color: T?.muted, marginTop: 4 }}>{pixAberto.titulo?.descricao} · {formatarCentavos(pixAberto.valor_centavos)}</div>
+            {pixQrDataUrl ? <div style={{ display: "flex", justifyContent: "center", margin: "18px 0 12px" }}><img src={pixQrDataUrl} alt="QR Code Pix" width="240" height="240" style={{ borderRadius: 10, border: `1px solid ${T?.line}` }} /></div> : <div style={{ marginTop: 18, padding: 14, borderRadius: 10, background: T?.paper, color: T?.muted, fontSize: 12 }}>O QR Code não foi retornado pelo provedor. Use o payload abaixo.</div>}
+            <textarea readOnly aria-label="Pix copia e cola" value={pixAberto.pix_copia_e_cola || ""} rows={4} style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: `1px solid ${T?.line}`, fontFamily: "monospace", fontSize: 11, boxSizing: "border-box", resize: "vertical" }} />
+            <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+              <button onClick={copiarPix} disabled={!pixAberto.pix_copia_e_cola} style={{ display: "inline-flex", alignItems: "center", gap: 6, background: T?.forest, color: "#fff", border: "none", borderRadius: 999, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}><Copy size={13} /> {pixCopiado ? "Copiado" : "Copiar código"}</button>
+              {pixAberto.location && <a href={pixAberto.location.startsWith("http") ? pixAberto.location : `https://${pixAberto.location}`} target="_blank" rel="noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 6, border: `1px solid ${T?.line}`, color: T?.ink, textDecoration: "none", borderRadius: 999, padding: "8px 14px", fontSize: 12, fontWeight: 700 }}><ExternalLink size={13} /> Abrir location</a>}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
