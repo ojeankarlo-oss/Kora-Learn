@@ -31,6 +31,7 @@ import DocumentosAlunoModal from "./GestorDocumentos";
 import ContratoConfig from "./ContratoConfig";
 import Chamados from "./Chamados";
 import Pedagogico from "./Pedagogico";
+import PainelPrioridades from "./PainelPrioridades";
 import ProfessorApp from "./ProfessorApp";
 import MateriaisAvisosAluno from "./MateriaisAvisosAluno";
 import AvaliacoesAluno from "./AvaliacoesAluno";
@@ -1170,6 +1171,8 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
             ))}
           </div>
         )}
+
+        <PainelPrioridades T={T} unidadeId={unidadeFiltro || null} onNavigate={setActiveTab} />
 
     <div style={{ marginTop: 20, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <label style={{ fontSize: 12, fontWeight: 600, color: T.muted }}>Unidade</label>

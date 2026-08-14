@@ -1055,6 +1055,15 @@ export async function cancelarTitulo(tituloId, observacao) {
   return data;
 }
 
+/* ---------------- PAINEL DE PRIORIDADES DO DIA ---------------- */
+export async function prioridadesDoDia(unidadeId = null) {
+  const { data, error } = await supabase.rpc("prioridades_do_dia", {
+    p_unidade_id: unidadeId || null,
+  });
+  if (error) throw error;
+  return data ?? [];
+}
+
 /* ---------------- AVALIACOES E PROVAS (FASE 19) ---------------- */
 export async function avaliacoesDisponiveisAluno() {
   const { data, error } = await supabase.rpc("avaliacoes_disponiveis_aluno");
