@@ -58,34 +58,50 @@ as $$
       and d.tenant_id = public.current_tenant_id()
       and d.situacao = 'pendente'
       and (p_unidade_id is null or m.unidade_id = p_unidade_id)
+  ),
+  resultado as (
+    select
+      'chamados'::text as categoria,
+      'Chamados vencendo'::text as titulo,
+      case when r.criticos > 0 then r.criticos || ' fora do prazo de resposta' else 'Nenhum chamado fora do prazo' end as descricao,
+      r.total as quantidade,
+      r.criticos as quantidade_critica,
+      case when r.criticos > 0 then 1 when r.total > 0 then 2 else 4 end as prioridade,
+      'chamados'::text as rota
+    from chamados_resumo r
+    union all
+    select
+      'financeiro'::text as categoria,
+      'Mensalidades atrasadas'::text as titulo,
+      case when r.criticos > 0 then r.criticos || ' mensalidade(s) vencida(s)' else 'Nenhuma mensalidade vencida' end as descricao,
+      r.total as quantidade,
+      r.criticos as quantidade_critica,
+      case when r.criticos > 0 then 1 when r.total > 0 then 3 else 4 end as prioridade,
+      'financeiro'::text as rota
+    from titulos_resumo r
+    union all
+    select
+      'frequencia'::text as categoria,
+      'Alunos com frequência baixa'::text as titulo,
+      case when r.criticos > 0 then r.criticos || ' abaixo de 75%' else 'Todos dentro do mínimo de 75%' end as descricao,
+      r.total as quantidade,
+      r.criticos as quantidade_critica,
+      case when r.criticos > 0 then 1 else 4 end as prioridade,
+      'alunos'::text as rota
+    from frequencia_resumo r
+    union all
+    select
+      'documentos'::text as categoria,
+      'Documentos aguardando análise'::text as titulo,
+      case when r.criticos > 0 then r.criticos || ' há mais de 72 horas na fila' else 'Nenhum documento fora do SLA' end as descricao,
+      r.total as quantidade,
+      r.criticos as quantidade_critica,
+      case when r.criticos > 0 then 2 when r.total > 0 then 3 else 4 end as prioridade,
+      'alunos'::text as rota
+    from documentos_resumo r
   )
-  select 'chamados', 'Chamados vencendo',
-    case when r.criticos > 0 then r.criticos || ' fora do prazo de resposta' else 'Nenhum chamado fora do prazo' end,
-    r.total, r.criticos,
-    case when r.criticos > 0 then 1 when r.total > 0 then 2 else 4 end,
-    'chamados'
-  from chamados_resumo r
-  union all
-  select 'financeiro', 'Mensalidades atrasadas',
-    case when r.criticos > 0 then r.criticos || ' mensalidade(s) vencida(s)' else 'Nenhuma mensalidade vencida' end,
-    r.total, r.criticos,
-    case when r.criticos > 0 then 1 when r.total > 0 then 3 else 4 end,
-    'financeiro'
-  from titulos_resumo r
-  union all
-  select 'frequencia', 'Alunos com frequência baixa',
-    case when r.criticos > 0 then r.criticos || ' abaixo de 75%' else 'Todos dentro do mínimo de 75%' end,
-    r.total, r.criticos,
-    case when r.criticos > 0 then 1 else 4 end,
-    'alunos'
-  from frequencia_resumo r
-  union all
-  select 'documentos', 'Documentos aguardando análise',
-    case when r.criticos > 0 then r.criticos || ' há mais de 72 horas na fila' else 'Nenhum documento fora do SLA' end,
-    r.total, r.criticos,
-    case when r.criticos > 0 then 2 when r.total > 0 then 3 else 4 end,
-    'alunos'
-  from documentos_resumo r
+  select categoria, titulo, descricao, quantidade, quantidade_critica, prioridade, rota
+  from resultado
   order by prioridade, categoria;
 $$;
 
