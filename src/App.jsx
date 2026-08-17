@@ -31,7 +31,8 @@ import DocumentosAlunoModal from "./GestorDocumentos";
 import ContratoConfig from "./ContratoConfig";
 import Chamados from "./Chamados";
 import Pedagogico from "./Pedagogico";
-import PainelPrioridades from "./PainelPrioridades";
+import PainelPrioridades, { PainelPrioridadesBoundary } from "./PainelPrioridades";
+import AvaliacoesGestor from "./AvaliacoesGestor";
 import ProfessorApp from "./ProfessorApp";
 import MateriaisAvisosAluno from "./MateriaisAvisosAluno";
 import AvaliacoesAluno from "./AvaliacoesAluno";
@@ -849,7 +850,7 @@ function AlunoApp({ perfil, onLogout, toast }) {
           <Financeiro perfil={perfil} T={T} />
         )}
 
-        {tab === "avaliacoes" && T.modulos?.avaliacoes !== false && (
+        {tab === "avaliacoes" && T.modulos?.provas !== false && (
           <AvaliacoesAluno T={T} toast={toast} />
         )}
 
@@ -861,7 +862,7 @@ function AlunoApp({ perfil, onLogout, toast }) {
             { id: "player", label: "Aulas", icon: PlayCircle },
         ...(T.modulos?.documentos ? [{ id: "documentos", label: "Documentos", icon: FileText }] : []),
               ...(T.modulos?.financeiro ? [{ id: "financeiro", label: "Financeiro", icon: Wallet }] : []),
-              ...(T.modulos?.avaliacoes !== false ? [{ id: "avaliacoes", label: "Provas", icon: ClipboardCheck }] : []),
+              ...(T.modulos?.provas !== false ? [{ id: "avaliacoes", label: "Provas", icon: ClipboardCheck }] : []),
           ].map(({ id, label, icon: Icon }) => {
             const active = tab === id;
             return (
@@ -1172,7 +1173,7 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
           </div>
         )}
 
-        <PainelPrioridades T={T} unidadeId={unidadeFiltro || null} onNavigate={setActiveTab} />
+        <PainelPrioridadesBoundary fallback={<div style={{ marginTop: 16, padding: 12, borderRadius: 10, background: "#FFF5E3", color: T.muted, fontSize: 12 }}>O painel de prioridades está temporariamente indisponível. As demais abas continuam disponíveis.</div>}><PainelPrioridades T={T} unidadeId={unidadeFiltro || null} onNavigate={setActiveTab} /></PainelPrioridadesBoundary>
 
     <div style={{ marginTop: 20, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <label style={{ fontSize: 12, fontWeight: 600, color: T.muted }}>Unidade</label>
@@ -1187,7 +1188,7 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
               ))}
             </select>
           </div>
-          <div style={{ marginTop: 24, display: "flex", gap: 8 }}>
+          <div style={{ marginTop: 24, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
       <button onClick={() => setActiveTab("leads")} style={{ background: activeTab === "leads" ? T.forest : "none", color: activeTab === "leads" ? "#fff" : T.muted, border: activeTab === "leads" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
         Leads
       </button>
@@ -1217,9 +1218,14 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
           <button onClick={() => setActiveTab("pedagogico")} style={{ background: activeTab === "pedagogico" ? T.forest : "none", color: activeTab === "pedagogico" ? "#fff" : T.muted, border: activeTab === "pedagogico" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
             Pedagógico
           </button>
+          {T.modulos?.provas !== false && (
+            <button onClick={() => setActiveTab("provas")} style={{ background: activeTab === "provas" ? T.forest : "none", color: activeTab === "provas" ? "#fff" : T.muted, border: activeTab === "provas" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
+              Provas
+            </button>
+          )}
           <button onClick={() => setActiveTab("configuracoes")} style={{ background: activeTab === "configuracoes" ? T.forest : "none", color: activeTab === "configuracoes" ? "#fff" : T.muted, border: activeTab === "configuracoes" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
-        Configurações
-      </button>
+            Configurações
+          </button>
       {T.modulos?.financeiro && (
         <button onClick={() => setActiveTab("financeiro")} style={{ background: activeTab === "financeiro" ? T.forest : "none", color: activeTab === "financeiro" ? "#fff" : T.muted, border: activeTab === "financeiro" ? "none" : "1px solid " + T.line, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 700 }}>
           Financeiro
@@ -1546,7 +1552,7 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
               {/* Módulos */}
               <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${T.line}` }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: T.ink, marginBottom: 12 }}>Módulos</div>
-                {["inscricao_publica", "alunos", "documentos", "avaliacoes"].map((modulo) => (
+                {["inscricao_publica", "alunos", "documentos", "provas"].map((modulo) => (
                   <label key={modulo} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, cursor: "pointer" }}>
                     <input
                       type="checkbox"
@@ -1555,7 +1561,7 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
                       style={{ cursor: "pointer" }}
                     />
                     <span style={{ fontSize: 13, color: T.ink }}>
-                      {modulo === "inscricao_publica" ? "Inscrição pública" : modulo === "alunos" ? "Alunos" : modulo === "documentos" ? "Documentos" : modulo === "avaliacoes" ? "Avaliações e provas" : modulo}
+                      {modulo === "inscricao_publica" ? "Inscrição pública" : modulo === "alunos" ? "Alunos" : modulo === "documentos" ? "Documentos" : modulo === "provas" ? "Provas" : modulo}
                     </span>
                   </label>
                 ))}
@@ -1665,6 +1671,9 @@ function GestorApp({ perfil, onLogout, toast, setTema }) {
       </div>
     {activeTab === "cursos" && (
       <Cursos perfil={perfil} toast={toast} T={T} />
+    )}
+    {activeTab === "provas" && T.modulos?.provas !== false && (
+      <AvaliacoesGestor perfil={perfil} toast={toast} T={T} />
     )}
     {activeTab === "financeiro" && T.modulos?.financeiro && (
       <FinanceiroGestor perfil={perfil} toast={toast} T={T} />

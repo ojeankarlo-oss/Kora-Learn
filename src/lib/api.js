@@ -263,6 +263,18 @@ export async function listarDisciplinasDoCurso(cursoId) {
   return data ?? [];
 }
 
+export async function listarTurmasDoGestor(cursoId) {
+  let query = supabase
+    .from("turmas")
+    .select("id, nome, curso_id, unidade_id, ativa")
+    .eq("ativa", true)
+    .order("nome");
+  if (cursoId) query = query.eq("curso_id", cursoId);
+  const { data, error } = await query;
+  if (error) throw error;
+  return data ?? [];
+}
+
 export async function criarDisciplina({ cursoId, nome, descricao, ordem, cargaHoraria }) {
   const perfil = await meuPerfil();
   const { error } = await supabase.from("disciplinas").insert({

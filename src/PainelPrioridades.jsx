@@ -2,6 +2,25 @@ import React, { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle2, Clock3, FileText, RefreshCw, Wallet, Users, Inbox, ArrowRight } from "lucide-react";
 import { prioridadesDoDia } from "./lib/api";
 
+export class PainelPrioridadesBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error) {
+    console.error("Painel de Prioridades falhou sem bloquear a navegação:", error);
+  }
+
+  render() {
+    return this.state.hasError ? this.props.fallback : this.props.children;
+  }
+}
+
 const ICONES = {
   chamados: Inbox,
   financeiro: Wallet,

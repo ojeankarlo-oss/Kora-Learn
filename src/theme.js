@@ -31,6 +31,7 @@ export const TEMA_PADRAO = {
     alunos: true,
     financeiro: false,
     documentos: false,
+    provas: true,
     rh: false,
   },
 };
@@ -128,10 +129,14 @@ export function montarTema(tenantPub) {
     amber: corDestaque,
     amberSoft: clarearCor(corDestaque, 30),
     
-    // Módulos do tenant (mescla com padrão)
-    modulos: {
-      ...TEMA_PADRAO.modulos,
-      ...(tenantPub.modulos || {}),
-    },
+    // Módulos do tenant (mescla com padrão). `provas` é a chave canônica;
+    // `avaliacoes` permanece como alias de compatibilidade durante a transição.
+    modulos: (() => {
+      const modulosTenant = tenantPub.modulos || {};
+      const modulos = { ...TEMA_PADRAO.modulos, ...modulosTenant };
+      if (modulosTenant.provas === undefined && modulosTenant.avaliacoes !== undefined) modulos.provas = modulosTenant.avaliacoes;
+      if (modulosTenant.avaliacoes === undefined && modulosTenant.provas !== undefined) modulos.avaliacoes = modulosTenant.provas;
+      return modulos;
+    })(),
   };
 }
