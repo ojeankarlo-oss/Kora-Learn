@@ -1102,17 +1102,25 @@ export async function enviarTentativaAvaliacao(tentativaId, respostas) {
 }
 
 export async function listarQuestoesDisciplina(disciplinaId) {
-  const { data, error } = await supabase
+  const camposBase = "id, disciplina_id, enunciado, tipo, dificuldade, alternativas, resposta_correta, pontos, ativa";
+  const camposComResposta = `${camposBase}, resposta_esperada`;
+  const consulta = (campos) => supabase
     .from("questoes")
-    .select("id, disciplina_id, enunciado, tipo, dificuldade, alternativas, resposta_correta, pontos, ativa")
+    .select(campos)
     .eq("disciplina_id", disciplinaId)
     .order("created_at", { ascending: false });
+
+  let { data, error } = await consulta(camposComResposta);
+  if (error && /resposta_esperada|column/i.test(error.message || "")) {
+    ({ data, error } = await consulta(camposBase));
+    data = (data ?? []).map((questao) => ({ ...questao, resposta_esperada: null }));
+  }
   if (error) throw error;
   return data ?? [];
 }
 
-export async function criarQuestao({ tenantId, disciplinaId, enunciado, tipo, dificuldade, alternativas, respostaCorreta, pontos }) {
-  const { data, error } = await supabase.from("questoes").insert({
+export async function criarQuestao({ tenantId, disciplinaId, enunciado, tipo, dificuldade, alternativas, respostaCorreta, respostaEsperada, pontos }) {
+  const payload = {
     tenant_id: tenantId,
     disciplina_id: disciplinaId,
     enunciado,
@@ -1120,8 +1128,14 @@ export async function criarQuestao({ tenantId, disciplinaId, enunciado, tipo, di
     dificuldade,
     alternativas: alternativas ?? [],
     resposta_correta: respostaCorreta || null,
+    resposta_esperada: respostaEsperada || null,
     pontos: Number(pontos) || 1,
-  }).select().single();
+  };
+  let { data, error } = await supabase.from("questoes").insert(payload).select().single();
+  if (error && /resposta_esperada|column/i.test(error.message || "")) {
+    const { resposta_esperada: _respostaEsperada, ...payloadLegado } = payload;
+    ({ data, error } = await supabase.from("questoes").insert(payloadLegado).select().single());
+  }
   if (error) throw error;
   return data;
 }
