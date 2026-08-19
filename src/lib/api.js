@@ -1188,6 +1188,77 @@ export async function atualizarSituacaoAvaliacao(avaliacaoId, situacao) {
   return data;
 }
 
+// Compatibilidade com o contrato inicial do sprint. O produto usa o schema
+// versionado em português (questoes/avaliacoes), por isso estes wrappers
+// traduzem os nomes sem criar tabelas paralelas em inglês.
+export async function listarQuestoes({ disciplinaId, tipo, busca } = {}) {
+  const camposBase = "id, tenant_id, disciplina_id, enunciado, tipo, dificuldade, alternativas, resposta_correta, pontos, ativa";
+  const camposComResposta = `${camposBase}, resposta_esperada`;
+  const consulta = (campos) => {
+    let query = supabase.from("questoes").select(campos).eq("ativa", true);
+    if (disciplinaId) query = query.eq("disciplina_id", disciplinaId);
+    if (tipo) query = query.eq("tipo", tipo);
+    if (busca) query = query.ilike("enunciado", `%${busca}%`);
+    return query.order("created_at", { ascending: false });
+  };
+
+  let { data, error } = await consulta(camposComResposta);
+  if (error && /resposta_esperada|column/i.test(error.message || "")) {
+    ({ data, error } = await consulta(camposBase));
+    data = (data ?? []).map((questao) => ({ ...questao, resposta_esperada: null }));
+  }
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function obterQuestao(questaoId) {
+  const { data, error } = await supabase
+    .from("questoes")
+    .select("id, tenant_id, disciplina_id, enunciado, tipo, dificuldade, alternativas, resposta_correta, pontos, ativa, resposta_esperada")
+    .eq("id", questaoId)
+    .single();
+  if (error && /resposta_esperada|column/i.test(error.message || "")) {
+    const legado = await supabase.from("questoes").select("id, tenant_id, disciplina_id, enunciado, tipo, dificuldade, alternativas, resposta_correta, pontos, ativa").eq("id", questaoId).single();
+    if (legado.error) throw legado.error;
+    return { ...legado.data, resposta_esperada: null };
+  }
+  if (error) throw error;
+  return data;
+}
+
+export async function deletarQuestao(questaoId) {
+  const { data, error } = await supabase
+    .from("questoes")
+    .update({ ativa: false })
+    .eq("id", questaoId)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function criarQuiz({ tenantId, cursoId, disciplinaId, turmaId, titulo, descricao, criadoPor, questaoIds = [], modoAplicacao = "presencial", regraLiberacao = "manual", intervaloDias = 0, tentativasPermitidas = 1, notaMinima = 60, expiraEmDias, disponivelEm }) {
+  const avaliacao = await criarAvaliacao({
+    tenantId,
+    cursoId,
+    disciplinaId,
+    turmaId,
+    titulo,
+    descricao,
+    modoAplicacao,
+    regraLiberacao,
+    intervaloDias,
+    tentativasPermitidas,
+    notaMinima,
+    expiraEmDias,
+    quantidadeQuestoes: questaoIds.length || null,
+    disponivelEm,
+    criadoPor,
+  });
+  if (questaoIds.length > 0) await vincularQuestoesAvaliacao(avaliacao.id, questaoIds);
+  return avaliacao;
+}
+
 export async function tentativasAvaliacao(avaliacaoId) {
   const { data, error } = await supabase
     .from("avaliacao_tentativas")
