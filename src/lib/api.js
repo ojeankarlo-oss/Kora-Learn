@@ -1518,3 +1518,337 @@ export async function kpisFinanceiro() {
   }
   return kpis;
 }
+
+
+/* ============================================================
+   PHASE 8: CRM + AUTOMAÇÕES + WHATSAPP STUB
+   ============================================================ */
+
+async function contextoAutenticado() {
+  const perfil = await meuPerfil();
+  if (!perfil) throw new Error("É necessário estar autenticado.");
+  return { perfil, tenantId: perfil.tenant_id, usuarioId: perfil.id };
+}
+
+function textoBuscaSeguro(valor) {
+  return String(valor ?? "").replace(/[,%()]/g, " ").trim();
+}
+
+export async function criarContato({ nome, email, telefone, tipo = "lead", fonte, notas }) {
+  const { tenantId, usuarioId } = await contextoAutenticado();
+  const { data, error } = await supabase.from("contacts").insert({
+    nome: String(nome || "").trim(), email: email || null, telefone: telefone || null,
+    tipo, fonte: fonte || null, notas: notas || null, tenant_id: tenantId, criado_por: usuarioId,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function listarContatos({ tipo, status, busca } = {}) {
+  const { tenantId } = await contextoAutenticado();
+  let query = supabase.from("contacts").select("*").eq("tenant_id", tenantId);
+  if (tipo) query = query.eq("tipo", tipo);
+  if (status) query = query.eq("status", status);
+  const termo = textoBuscaSeguro(busca);
+  if (termo) query = query.or(`nome.ilike.%${termo}%,email.ilike.%${termo}%,telefone.ilike.%${termo}%`);
+  const { data, error } = await query.order("data_primeiro_contato", { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function obterContato(contatoId) {
+  const { tenantId } = await contextoAutenticado();
+  const { data, error } = await supabase.from("contacts")
+    .select("*, contact_messages(*)").eq("id", contatoId).eq("tenant_id", tenantId).single();
+  if (error) throw error;
+  return data;
+}
+
+export async function atualizarContato(contatoId, dados = {}) {
+  const { tenantId } = await contextoAutenticado();
+  const permitidos = ["nome", "email", "telefone", "tipo", "status", "fonte", "notas"];
+  const patch = Object.fromEntries(permitidos.filter((campo) => dados[campo] !== undefined).map((campo) => [campo, dados[campo]]));
+  const { data, error } = await supabase.from("contacts").update(patch).eq("id", contatoId).eq("tenant_id", tenantId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deletarContato(contatoId) {
+  return atualizarContato(contatoId, { status: "inativo" });
+}
+
+export async function atualizarUltimoContatoData(contatoId) {
+  const { tenantId } = await contextoAutenticado();
+  const { data, error } = await supabase.from("contacts").update({ data_ultimo_contato: new Date().toISOString() })
+    .eq("id", contatoId).eq("tenant_id", tenantId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function criarAutomacao({ nome, descricao, tipo, triggerTipo, triggerDados = {}, acaoTipo, acaoDados = {} }) {
+  const { tenantId, usuarioId } = await contextoAutenticado();
+  const { data, error } = await supabase.from("automations").insert({
+    nome, descricao: descricao || null, tipo, trigger_tipo: triggerTipo, trigger_dados: triggerDados,
+    acao_tipo: acaoTipo, acao_dados: acaoDados, tenant_id: tenantId, criado_por: usuarioId,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function listarAutomacoes() {
+  const { tenantId } = await contextoAutenticado();
+  const { data, error } = await supabase.from("automations").select("*").eq("tenant_id", tenantId).eq("ativo", true).order("criado_em", { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function obterAutomacao(automacaoId) {
+  const { tenantId } = await contextoAutenticado();
+  const { data, error } = await supabase.from("automations").select("*").eq("id", automacaoId).eq("tenant_id", tenantId).single();
+  if (error) throw error;
+  return data;
+}
+
+export async function atualizarAutomacao(automacaoId, dados = {}) {
+  const { tenantId } = await contextoAutenticado();
+  const permitidos = ["nome", "descricao", "tipo", "trigger_tipo", "trigger_dados", "acao_tipo", "acao_dados", "ativo"];
+  const patch = Object.fromEntries(permitidos.filter((campo) => dados[campo] !== undefined).map((campo) => [campo, dados[campo]]));
+  const { data, error } = await supabase.from("automations").update(patch).eq("id", automacaoId).eq("tenant_id", tenantId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function desativarAutomacao(automacaoId) {
+  return atualizarAutomacao(automacaoId, { ativo: false });
+}
+
+export async function criarTemplateWhatsapp({ nome, corpo, variaveis = {} }) {
+  const { tenantId, usuarioId } = await contextoAutenticado();
+  const { data, error } = await supabase.from("whatsapp_templates").insert({
+    nome, corpo, variaveis, tenant_id: tenantId, criado_por: usuarioId,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function listarTemplatesWhatsapp() {
+  const { tenantId } = await contextoAutenticado();
+  const { data, error } = await supabase.from("whatsapp_templates").select("*").eq("tenant_id", tenantId).order("criado_em", { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function atualizarTemplateWhatsapp(templateId, { nome, corpo, variaveis } = {}) {
+  const { tenantId } = await contextoAutenticado();
+  const patch = {};
+  if (nome !== undefined) patch.nome = nome;
+  if (corpo !== undefined) patch.corpo = corpo;
+  if (variaveis !== undefined) patch.variaveis = variaveis;
+  const { data, error } = await supabase.from("whatsapp_templates").update(patch).eq("id", templateId).eq("tenant_id", tenantId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deletarTemplateWhatsapp(templateId) {
+  const { tenantId } = await contextoAutenticado();
+  const { error } = await supabase.from("whatsapp_templates").delete().eq("id", templateId).eq("tenant_id", tenantId);
+  if (error) throw error;
+}
+
+export async function enviarMensagemContato(contatoId, templateId, variaveis = {}) {
+  const contato = await obterContato(contatoId);
+  if (!contato.telefone) throw new Error("Contato sem telefone");
+  const templates = await listarTemplatesWhatsapp();
+  const template = templates.find((item) => item.id === templateId);
+  if (!template) throw new Error("Template WhatsApp não encontrado");
+  let mensagem = template.corpo;
+  for (const [chave, valor] of Object.entries(variaveis)) mensagem = mensagem.replaceAll(`{{${chave}}}`, String(valor));
+  const { data, error } = await supabase.from("contact_messages").insert({
+    contact_id: contatoId, automation_id: null, canal: "whatsapp", destinatario: contato.telefone,
+    corpo: mensagem, variaveis_usadas: { ...variaveis, _template_id: templateId }, status: "enviado", tentativas: 1,
+  }).select().single();
+  if (error) throw error;
+  await atualizarUltimoContatoData(contatoId);
+  console.info(`[WhatsApp STUB] Para: ${contato.telefone}\nMensagem:\n${mensagem}`);
+  return data;
+}
+
+export async function listarMensagensContato(contatoId) {
+  await obterContato(contatoId);
+  const { data, error } = await supabase.from("contact_messages").select("*").eq("contact_id", contatoId).order("criado_em", { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function listarMensagensAutomacao(automacaoId) {
+  await contextoAutenticado();
+  const { data, error } = await supabase.from("contact_messages")
+    .select("*").eq("automation_id", automacaoId).order("criado_em", { ascending: false });
+  if (error) throw error;
+  // A policy messages_select_staff já restringe o histórico ao tenant atual.
+  return data ?? [];
+}
+
+// Alias com a grafia usada no documento inicial do sprint.
+export const listarMensagensAutomazeao = listarMensagensAutomacao;
+
+export async function executarAutomacoesPorTrigger(triggerTipo) {
+  const automacoes = (await listarAutomacoes()).filter((automacao) => automacao.trigger_tipo === triggerTipo);
+  console.info(`[Automações] ${automacoes.length} automação(ões) encontradas para ${triggerTipo}.`);
+  return automacoes;
+}
+
+// Alias com a grafia usada no documento inicial do sprint.
+export const executarAutomacaosPorTrigger = executarAutomacoesPorTrigger;
+
+/* ============================================================
+   PHASE 9: PULSO (CHECK-IN + COMUNIDADE)
+   ============================================================ */
+
+export async function criarCheckIn({ humor, energia, estresse, notas }) {
+  const { tenantId, usuarioId } = await contextoAutenticado();
+  const { data, error } = await supabase.from("check_ins").insert({ usuario_id: usuarioId, tenant_id: tenantId, humor, energia, estresse, notas: notas || null }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function meuCheckInHoje() {
+  const { usuarioId } = await contextoAutenticado();
+  const inicio = new Date(); inicio.setHours(0, 0, 0, 0);
+  const fim = new Date(inicio); fim.setDate(fim.getDate() + 1);
+  const { data, error } = await supabase.from("check_ins").select("*").eq("usuario_id", usuarioId)
+    .gte("criado_em", inicio.toISOString()).lt("criado_em", fim.toISOString()).order("criado_em", { ascending: false }).limit(1).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+export async function listarCheckIns(dias = 7) {
+  const { usuarioId } = await contextoAutenticado();
+  const limite = new Date(); limite.setDate(limite.getDate() - Number(dias || 7));
+  const { data, error } = await supabase.from("check_ins").select("*").eq("usuario_id", usuarioId).gte("criado_em", limite.toISOString()).order("criado_em", { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function criarPostComunidade({ titulo, conteudo, tipo }) {
+  const { tenantId, usuarioId } = await contextoAutenticado();
+  const { data, error } = await supabase.from("community_posts").insert({ usuario_id: usuarioId, tenant_id: tenantId, titulo: titulo || null, conteudo, tipo: tipo || null }).select("*, usuarios(nome, avatar_url)").single();
+  if (error) throw error;
+  return data;
+}
+
+export async function listarPostsComunidade({ tipo, pagina = 1, limite = 20 } = {}) {
+  const { tenantId } = await contextoAutenticado();
+  const inicio = Math.max(0, (Number(pagina) - 1) * Number(limite));
+  const tamanho = Math.min(100, Math.max(1, Number(limite)));
+  let query = supabase.from("community_posts").select("*, usuarios(nome, avatar_url), community_comments(count), community_likes(count)", { count: "exact" }).eq("tenant_id", tenantId);
+  if (tipo) query = query.eq("tipo", tipo);
+  const { data, error, count } = await query.order("criado_em", { ascending: false }).range(inicio, inicio + tamanho - 1);
+  if (error) throw error;
+  return { posts: data ?? [], total: count ?? 0, pagina: Number(pagina), limite: tamanho };
+}
+
+export async function obterPostComunidade(postId) {
+  const { tenantId } = await contextoAutenticado();
+  const { data, error } = await supabase.from("community_posts").select("*, usuarios(nome, avatar_url), community_comments(*, usuarios(nome, avatar_url))").eq("id", postId).eq("tenant_id", tenantId).single();
+  if (error) throw error;
+  return data;
+}
+
+export async function atualizarPostComunidade(postId, { titulo, conteudo, tipo } = {}) {
+  const { usuarioId, tenantId } = await contextoAutenticado();
+  const { data, error } = await supabase.from("community_posts").update({ titulo, conteudo, tipo }).eq("id", postId).eq("usuario_id", usuarioId).eq("tenant_id", tenantId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deletarPostComunidade(postId) {
+  const { usuarioId, tenantId } = await contextoAutenticado();
+  const { error } = await supabase.from("community_posts").delete().eq("id", postId).eq("usuario_id", usuarioId).eq("tenant_id", tenantId);
+  if (error) throw error;
+}
+
+export async function criarComentario(postId, conteudo) {
+  const { usuarioId } = await contextoAutenticado();
+  const { data, error } = await supabase.from("community_comments").insert({ post_id: postId, usuario_id: usuarioId, conteudo }).select("*, usuarios(nome, avatar_url)").single();
+  if (error) throw error;
+  return data;
+}
+
+export async function listarComentarios(postId) {
+  const { data, error } = await supabase.from("community_comments").select("*, usuarios(nome, avatar_url)").eq("post_id", postId).order("criado_em", { ascending: true });
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function deletarComentario(comentarioId) {
+  const { usuarioId } = await contextoAutenticado();
+  const { error } = await supabase.from("community_comments").delete().eq("id", comentarioId).eq("usuario_id", usuarioId);
+  if (error) throw error;
+}
+
+export async function darLike(postId) {
+  const { usuarioId } = await contextoAutenticado();
+  const { error } = await supabase.from("community_likes").insert({ post_id: postId, usuario_id: usuarioId });
+  if (error && error.code !== "23505") throw error;
+}
+
+export async function removerLike(postId) {
+  const { usuarioId } = await contextoAutenticado();
+  const { error } = await supabase.from("community_likes").delete().eq("post_id", postId).eq("usuario_id", usuarioId);
+  if (error) throw error;
+}
+
+export async function eu_dei_like(postId) {
+  const { usuarioId } = await contextoAutenticado();
+  const { data, error } = await supabase.from("community_likes").select("id").eq("post_id", postId).eq("usuario_id", usuarioId).maybeSingle();
+  if (error) throw error;
+  return Boolean(data);
+}
+
+/* ============================================================
+   PHASE 10: B2G API PUBLICA
+   ============================================================ */
+
+export async function validarApiKey(chave) {
+  const { data, error } = await supabase.from("api_keys").select("tenant_id").eq("chave", chave).eq("ativo", true)
+    .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`).single();
+  if (error || !data) throw new Error("API key inválida ou expirada");
+  return data.tenant_id;
+}
+
+export async function listarContatosPorApiKey(chave) {
+  const tenantId = await validarApiKey(chave);
+  const { data, error } = await supabase.from("contacts").select("id, nome, email, telefone, tipo, status, criado_em").eq("tenant_id", tenantId).eq("status", "ativo");
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function criarContatoViaApi(chave, { nome, email, telefone, tipo = "lead", fonte } = {}) {
+  const tenantId = await validarApiKey(chave);
+  const { data, error } = await supabase.from("contacts").insert({ nome, email, telefone, tipo, fonte, tenant_id: tenantId }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function gerarApiKey(nome, descricao) {
+  const { tenantId } = await contextoAutenticado();
+  const chave = Array.from(globalThis.crypto.getRandomValues(new Uint8Array(32))).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const { data, error } = await supabase.from("api_keys").insert({ tenant_id: tenantId, chave, nome, descricao: descricao || null }).select("id, nome, descricao, chave, ativo, criado_em, expires_at").single();
+  if (error) throw error;
+  return data;
+}
+
+export async function listarApiKeys() {
+  const { tenantId } = await contextoAutenticado();
+  const { data, error } = await supabase.from("api_keys").select("id, nome, descricao, ativo, criado_em, ultimo_uso, expires_at").eq("tenant_id", tenantId).order("criado_em", { ascending: false });
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function desativarApiKey(keyId) {
+  const { tenantId } = await contextoAutenticado();
+  const { data, error } = await supabase.from("api_keys").update({ ativo: false }).eq("id", keyId).eq("tenant_id", tenantId).select().single();
+  if (error) throw error;
+  return data;
+}
