@@ -26,6 +26,29 @@ function assert(condition, message) {
   console.log(`PASS: ${message}`);
 }
 
+function isExpectedDenied(error) {
+  const status = error?.status ?? error?.statusCode;
+  const code = error?.code;
+  const message = String(error?.message ?? "").toLowerCase();
+  return status === 401 || status === 403 || code === "42501" || message.includes("permission denied") || message.includes("row-level security") || message.includes("not found");
+}
+
+function assertForbiddenOrEmpty({ data, error }, message) {
+  if (!error && (data ?? []).length === 0) {
+    assert(true, message);
+    return;
+  }
+  if (error && isExpectedDenied(error)) {
+    assert(true, message);
+    return;
+  }
+  if (!error && (data ?? []).length > 0) {
+    assert(false, `${message} — acesso indevido: dados retornados`);
+    return;
+  }
+  assert(false, `${message} — erro inesperado de infraestrutura/autorização: ${error?.code ?? error?.status ?? error?.statusCode ?? "desconhecido"}`);
+}
+
 async function testAnonCatalog() {
   const { data, error } = await client.rpc("listar_cursos_publicos", { p_tenant_slug: tenantASlug });
   if (error) throw error;
@@ -36,17 +59,17 @@ async function testAnonCatalog() {
     .select("id")
     .eq("id", courseBId)
     .limit(1);
-  assert(!directError && (directB ?? []).length === 0, "anon não lê diretamente curso do Tenant B");
+  assertForbiddenOrEmpty({ data: directB, error: directError }, "anon não lê diretamente curso do Tenant B");
 }
 
 async function testAnonLeadInjectionDenied() {
-  const { error } = await client.from("leads").insert({
+  const { data, error } = await client.from("leads").insert({
     tenant_id: tenantBId,
     nome: "KORA P0 negative test",
     email: "p0-negative-test@example.invalid",
     origem: "test",
   });
-  assert(!!error, "anon não injeta lead diretamente em Tenant B");
+  assert(!data && !!error && isExpectedDenied(error), "anon não injeta lead diretamente em Tenant B");
 }
 
 async function testAuthenticatedBoundary() {
@@ -61,7 +84,7 @@ async function testAuthenticatedBoundary() {
     .select("id")
     .eq("id", courseBId)
     .limit(1);
-  assert(!courseError && (courseB ?? []).length === 0, "usuário do Tenant A não lê curso do Tenant B");
+  assertForbiddenOrEmpty({ data: courseB, error: courseError }, "usuário do Tenant A não lê curso do Tenant B");
 
   if (process.env.KORA_TEST_TURMA_B_ID) {
     const { data: turmaB, error: turmaError } = await client
@@ -69,7 +92,7 @@ async function testAuthenticatedBoundary() {
       .select("id")
       .eq("id", process.env.KORA_TEST_TURMA_B_ID)
       .limit(1);
-    assert(!turmaError && (turmaB ?? []).length === 0, "usuário do Tenant A não lê turma do Tenant B");
+    assertForbiddenOrEmpty({ data: turmaB, error: turmaError }, "usuário do Tenant A não lê turma do Tenant B");
   }
 
   if (process.env.KORA_TEST_FILE_B_PATH) {
@@ -77,7 +100,7 @@ async function testAuthenticatedBoundary() {
     const { data: signed, error: fileError } = await client.storage
       .from(bucket)
       .createSignedUrl(process.env.KORA_TEST_FILE_B_PATH, 60);
-    assert(!!fileError || !signed?.signedUrl, "usuário do Tenant A não assina arquivo do Tenant B");
+    assert(!signed?.signedUrl && !!fileError && isExpectedDenied(fileError), "usuário do Tenant A não assina arquivo do Tenant B");
   }
 }
 
