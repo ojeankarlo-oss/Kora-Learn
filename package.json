@@ -8,6 +8,7 @@
     "build": "vite build",
     "lint": "oxlint",
     "check:encoding": "node scripts/check-utf8.mjs",
+    "test:p0:boundaries": "node scripts/kora-p0-tenant-boundaries.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

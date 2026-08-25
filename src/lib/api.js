@@ -110,19 +110,19 @@ export async function concluirAula(usuarioId, tenantId, aulaId) {
 /* ---------------- PRE-MATRICULA PUBLICA ---------------- */
 
 export async function criarPreMatricula({
-  tenantId, cursoId, nome, email, telefone, origem = "site", unidadeId = null,
+  tenantSlug, cursoId, nome, email, telefone, origem = "site", unidadeId = null,
   temNecessidadeEspecifica = false, necessidadesEspecificas = null,
 }) {
-  const { error } = await supabase.from("leads").insert({
-    tenant_id: tenantId,
-    curso_id: cursoId ?? null,
-    unidade_id: unidadeId ?? null,
-    nome,
-    email,
-    telefone,
-    origem,
-    tem_necessidade_especifica: !!temNecessidadeEspecifica,
-    necessidades_especificas: necessidadesEspecificas && necessidadesEspecificas.length ? necessidadesEspecificas : null,
+  const { error } = await supabase.rpc("criar_lead_publico", {
+    p_tenant_slug: tenantSlug,
+    p_curso_id: cursoId ?? null,
+    p_unidade_id: unidadeId ?? null,
+    p_nome: nome,
+    p_email: email,
+    p_telefone: telefone || null,
+    p_origem: origem,
+    p_tem_necessidade_especifica: !!temNecessidadeEspecifica,
+    p_necessidades_especificas: necessidadesEspecificas && necessidadesEspecificas.length ? necessidadesEspecificas : null,
   });
   if (error) throw error;
 }
@@ -188,12 +188,10 @@ export async function atualizarSituacaoMatricula(matriculaId, situacao) {
   if (error) throw error;
 }
 
-export async function listarCursosPublico() {
-  const { data, error } = await supabase
-    .from("cursos")
-    .select("id, nome")
-    .eq("ativo", true)
-    .order("nome");
+export async function listarCursosPublico(tenantSlug) {
+  const { data, error } = await supabase.rpc("listar_cursos_publicos", {
+    p_tenant_slug: tenantSlug,
+  });
   if (error) throw error;
   return data ?? [];
 }
@@ -373,8 +371,11 @@ export function aulaUsaArquivoStorage(urlVideo) {
 
 // Envia o arquivo (vídeo/PDF) de uma aula para o Storage e devolve o caminho
 // salvo (para ser gravado em aulas.url_video via criarAula/atualizarAula).
-export async function enviarArquivoConteudoCurso({ tenantId, disciplinaId, file }) {
-  const path = `${tenantId}/${disciplinaId}/${Date.now()}_${file.name}`;
+// Contrato canônico: {tenant_id}/{curso_id}/{arquivo}. Arquivos legados
+// não são movidos automaticamente; continuam exigindo decisão operacional própria.
+export async function enviarArquivoConteudoCurso({ tenantId, cursoId, file }) {
+  if (!tenantId || !cursoId) throw new Error("Tenant e curso são obrigatórios para upload");
+  const path = `${tenantId}/${cursoId}/${Date.now()}_${file.name}`;
   const { error } = await supabase.storage.from(BUCKET_CONTEUDO_CURSOS).upload(path, file, { upsert: false });
   if (error) throw error;
   return path;

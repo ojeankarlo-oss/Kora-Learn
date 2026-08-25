@@ -86,7 +86,7 @@ export default function PreMatricula() {
   const [loadingTenant, setLoadingTenant] = useState(true);
   const [tenantNaoEncontrado, setTenantNaoEncontrado] = useState(false);
   const [inscricaoEncerrada, setInscricaoEncerrada] = useState(false);
-  const [tenantId, setTenantId] = useState(null);
+  const [tenantSlug, setTenantSlug] = useState(null);
   const [unidadesPublico, setUnidadesPublico] = useState([]);
   const [unidadeId, setUnidadeId] = useState("");
   const [temNecessidade, setTemNecessidade] = useState(false);
@@ -110,6 +110,7 @@ export default function PreMatricula() {
   // Carregar tenant e atualizar tema
   useEffect(() => {
     const slug = extrairSlugDaURL();
+    setTenantSlug(slug);
     setLoadingTenant(true);
     
     obterTenantPublico(slug)
@@ -120,7 +121,6 @@ export default function PreMatricula() {
           return;
         }
         
-        setTenantId(tenantPub.id);
         listarUnidadesPublico(tenantPub.id)
           .then((lista) => setUnidadesPublico(lista || []))
           .catch(() => setUnidadesPublico([]));
@@ -143,10 +143,10 @@ export default function PreMatricula() {
 
   // Carregar cursos
   useEffect(() => {
-    if (inscricaoEncerrada || tenantNaoEncontrado) return;
+    if (inscricaoEncerrada || tenantNaoEncontrado || !tenantSlug) return;
     
     let ativo = true;
-    listarCursosPublico()
+    listarCursosPublico(tenantSlug)
       .then((data) => {
         if (ativo) setCursos(data);
       })
@@ -156,7 +156,7 @@ export default function PreMatricula() {
     return () => {
       ativo = false;
     };
-  }, [inscricaoEncerrada, tenantNaoEncontrado]);
+  }, [inscricaoEncerrada, tenantNaoEncontrado, tenantSlug]);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -177,7 +177,7 @@ export default function PreMatricula() {
           ]
         : null;
       await criarPreMatricula({
-        tenantId: tenantId || import.meta.env.VITE_TENANT_ID,
+        tenantSlug,
         cursoId: cursoId || null,
           unidadeId: unidadesPublico.length === 1 ? unidadesPublico[0].id : (unidadeId || null),
         origem: "site",
