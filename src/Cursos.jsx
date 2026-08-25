@@ -726,7 +726,7 @@ function NivelAulas({ T, toast, perfil, curso, disciplina, onVoltar }) {
         if (form.arquivo) {
           setEnviandoArquivo(true);
           try {
-            urlVideo = await enviarArquivoConteudoCurso({ tenantId: perfil.tenant_id, disciplinaId: disciplina.id, file: form.arquivo });
+            urlVideo = await enviarArquivoConteudoCurso({ tenantId: perfil.tenant_id, cursoId: curso.id, file: form.arquivo });
           } finally {
             setEnviandoArquivo(false);
           }
