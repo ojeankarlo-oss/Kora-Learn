@@ -1,0 +1,2 @@
+[functions.b2g-api]
+verify_jwt = false
