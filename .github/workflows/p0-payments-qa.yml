@@ -1,0 +1,93 @@
+name: P0 Payments QA
+
+on:
+  push:
+    branches:
+      - qa/p0-payments-validation
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  payments-qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: supabase/postgres:15.14.1.167
+        env:
+          POSTGRES_DB: kora_qa
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: local_qa_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d kora_qa"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGDATABASE: kora_qa
+      PGUSER: postgres
+      PGPASSWORD: local_qa_only
+      DATABASE_URL: postgresql://postgres:local_qa_only@localhost:5432/kora_qa
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install --yes postgresql-client
+
+      - name: Bootstrap disposable Supabase compatibility schemas
+        run: psql -v ON_ERROR_STOP=1 -f tests/payments/sql/bootstrap.sql
+
+      - name: Replay canonical migrations 001 through 027
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t migrations < <(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | sort)
+          if [[ ${#migrations[@]} -ne 27 ]]; then
+            echo "MIGRATION REPLAY: FAIL (expected 27 files, found ${#migrations[@]})"
+            exit 1
+          fi
+          for expected in $(seq -w 1 27); do
+            migration=$(printf '%s\n' "${migrations[@]}" | grep "/${expected}_" || true)
+            if [[ -z "$migration" ]]; then
+              echo "MIGRATION REPLAY: FAIL (missing ${expected})"
+              exit 1
+            fi
+            echo "Applying $migration"
+            if ! psql -v ON_ERROR_STOP=1 -f "$migration"; then
+              echo "MIGRATION REPLAY: FAIL ($migration)"
+              exit 1
+            fi
+          done
+          echo "MIGRATION REPLAY: PASS"
+
+      - name: Run real PostgreSQL payment invariants
+        run: psql -v ON_ERROR_STOP=1 -f tests/payments/sql/p0_payments_qa.sql
+
+      - name: Run concurrent idempotency with two connections
+        shell: bash
+        run: bash tests/payments/sql/concurrency.sh
+
+      - name: Run Node payment tests
+        run: npm ci && npm run test:payments
+
+      - name: Deno check webhook
+        run: deno check supabase/functions/asaas-webhook/index.ts
+
+      - name: Legacy P0 status
+        run: echo "LEGACY P0: NOT EXECUTED — AUTHORIZED FIXTURES UNAVAILABLE"
