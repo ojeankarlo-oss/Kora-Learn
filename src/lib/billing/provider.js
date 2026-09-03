@@ -36,3 +36,12 @@ export function centsToReais(cents) {
   if (!Number.isSafeInteger(value) || value <= 0) throw new Error("Valor em centavos inválido");
   return (value / 100).toFixed(2);
 }
+
+export function decimalReaisToCents(value) {
+  const text = String(value ?? "").trim().replace(",", ".");
+  if (!/^\d+(?:\.\d{1,2})?$/.test(text)) throw new Error("Valor decimal inválido");
+  const [whole, fraction = ""] = text.split(".");
+  const cents = Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
+  if (!Number.isSafeInteger(cents) || cents <= 0) throw new Error("Valor decimal inválido");
+  return cents;
+}

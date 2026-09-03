@@ -1,4 +1,4 @@
-import { PaymentCapability, centsToReais } from "./provider.js";
+import { PaymentCapability, centsToReais, decimalReaisToCents } from "./provider.js";
 
 const BASE_URLS = Object.freeze({
   sandbox: "https://sandbox.asaas.com/api/v3",
@@ -73,7 +73,8 @@ export function createAsaasProvider({ apiKey, environment = "sandbox", webhookSe
         eventType: payload.event,
         providerPaymentId: payment.id,
         invoiceId: payment.externalReference,
-        amountCents: Math.round(Number(payment.value) * 100),
+        amountCents: decimalReaisToCents(payment.value),
+        currency: payment.currency || "BRL",
         status: ["PAYMENT_RECEIVED", "PAYMENT_CONFIRMED"].includes(payload.event) ? "confirmed" : "pending",
       };
     },

@@ -12,6 +12,7 @@ export function createBillingOrchestrator({ repository, provider }) {
       if (invoice.status !== "open") throw new Error("Invoice nao esta aberta");
       const intent = await repository.createPaymentIntent({ tenantId, invoiceId, provider: provider.name, status: PaymentStatus.CREATED });
       const charge = await provider.createPixCharge({ providerCustomerId, invoiceId, amountCents: invoice.amountCents, dueDate: invoice.dueDate, description: invoice.description });
+      await repository.createPaymentAttempt({ paymentIntentId: intent.id, tenantId, provider: provider.name, providerPaymentId: charge.providerPaymentId, status: PaymentStatus.PENDING });
       return repository.attachProviderPayment(intent.id, { ...charge, status: PaymentStatus.PENDING });
     },
     async processWebhook({ headers, payload }) {
