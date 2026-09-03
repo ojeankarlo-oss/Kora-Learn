@@ -3,6 +3,15 @@ import { createClient } from "npm:@supabase/supabase-js@2.52.0";
 const corsHeaders = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "content-type, asaas-access-token", "Access-Control-Allow-Methods": "POST, OPTIONS" };
 function json(body: unknown, status = 200): Response { return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } }); }
 function env(name: string): string { const value = Deno.env.get(name)?.trim(); if (!value) throw new Error(`Secret ausente: ${name}`); return value; }
+function constantTimeEqual(expected: string, received: string | null): boolean {
+  if (!received) return false;
+  const expectedBytes = new TextEncoder().encode(expected);
+  const receivedBytes = new TextEncoder().encode(received);
+  const length = Math.max(expectedBytes.length, receivedBytes.length);
+  let difference = expectedBytes.length ^ receivedBytes.length;
+  for (let index = 0; index < length; index += 1) difference |= (expectedBytes[index] || 0) ^ (receivedBytes[index] || 0);
+  return difference === 0;
+}
 function cents(value: unknown): number {
   const text = String(value ?? "").trim().replace(",", ".");
   if (!/^\d+(?:\.\d{1,2})?$/.test(text)) throw new Error("Valor invalido");
@@ -16,7 +25,7 @@ Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (request.method !== "POST") return json({ error: "Metodo nao permitido" }, 405);
   const expected = env("ASAAS_WEBHOOK_SECRET");
-  if (request.headers.get("asaas-access-token") !== expected) return json({ error: "Nao autorizado" }, 401);
+  if (!constantTimeEqual(expected, request.headers.get("asaas-access-token"))) return json({ error: "Nao autorizado" }, 401);
   try {
     const url = env("SUPABASE_URL");
     const serviceKey = env("SUPABASE_SERVICE_ROLE_KEY");
