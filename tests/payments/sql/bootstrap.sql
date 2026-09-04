@@ -2,7 +2,7 @@
 
 do $$ begin create role anon nologin; exception when duplicate_object then null; end $$;
 do $$ begin create role authenticated nologin; exception when duplicate_object then null; end $$;
-do $$ begin create role service_role nologin bypassrls; exception when duplicate_object then null; end $$;
+do $$ begin create role service_role nologin; exception when duplicate_object then null; end $$;
 grant anon, authenticated, service_role to postgres;
 
 create schema if not exists auth;
