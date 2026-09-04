@@ -90,4 +90,5 @@ jobs:
         run: deno check supabase/functions/asaas-webhook/index.ts
 
       - name: Legacy P0 status
-        run: echo "LEGACY P0: NOT EXECUTED — AUTHORIZED FIXTURES UNAVAILABLE"
+        run: |
+          echo "LEGACY P0: NOT EXECUTED — AUTHORIZED FIXTURES UNAVAILABLE"
