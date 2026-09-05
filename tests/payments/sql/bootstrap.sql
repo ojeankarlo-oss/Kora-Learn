@@ -1,5 +1,10 @@
 \set ON_ERROR_STOP on
 
+\connect kora_qa supabase_admin
+grant create on database kora_qa to postgres;
+grant create on schema public to postgres;
+\connect kora_qa postgres
+
 do $$ begin create role anon nologin; exception when duplicate_object then null; end $$;
 do $$ begin create role authenticated nologin; exception when duplicate_object then null; end $$;
 do $$ begin create role service_role nologin; exception when duplicate_object then null; end $$;
