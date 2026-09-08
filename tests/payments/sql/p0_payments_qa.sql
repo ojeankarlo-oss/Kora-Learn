@@ -85,6 +85,10 @@ select pg_temp.assert_rejected($sql$
   insert into webhook_events(provider,provider_event_id,event_type,payload,tenant_id,invoice_id,status)
   values ('asaas','cross-webhook','PAYMENT_RECEIVED','{}','aaaaaaaa-0000-0000-0000-000000000001','bb300000-0000-0000-0000-000000000002','processing')
 $sql$,'tenant A webhook accepted tenant B invoice');
+select pg_temp.assert_rejected($sql$
+  insert into reconciliation_events(provider,provider_account_id,provider_transaction_id,status,tenant_id)
+  values ('asaas','bb200000-0000-0000-0000-000000000002','cross-reconciliation','pending','aaaaaaaa-0000-0000-0000-000000000001')
+$sql$,'tenant A reconciliation accepted tenant B provider account');
 
 do $$
 begin

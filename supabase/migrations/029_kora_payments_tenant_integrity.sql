@@ -1,6 +1,18 @@
 -- Enforce tenant equality across every financial relationship.
 create unique index if not exists uq_usuarios_id_tenant on public.usuarios(id, tenant_id);
 
+alter table public.reconciliation_events
+  add column if not exists tenant_id uuid references public.tenants(id) on delete cascade;
+
+update public.reconciliation_events child
+set tenant_id = parent.tenant_id
+from public.provider_accounts parent
+where parent.id = child.provider_account_id
+  and child.tenant_id is null;
+
+create index if not exists idx_reconciliation_events_tenant
+  on public.reconciliation_events(tenant_id, created_at desc);
+
 alter table public.billing_customers
   add constraint billing_customers_user_requires_tenant
   check (user_id is null or tenant_id is not null);
