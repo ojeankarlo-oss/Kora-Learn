@@ -2,6 +2,17 @@
 
 create or replace function pg_temp.assert_true(ok boolean, message text) returns void
 language plpgsql as $$ begin if not coalesce(ok, false) then raise exception 'ASSERTION FAILED: %', message; end if; end $$;
+create or replace function pg_temp.assert_rejected(statement text, message text) returns void
+language plpgsql as $$
+begin
+  begin
+    execute statement;
+  exception when others then
+    return;
+  end;
+  raise exception 'ASSERTION FAILED: %', message;
+end;
+$$;
 
 insert into auth.users(id,email) values
   ('10000000-0000-0000-0000-000000000001','qa-a@local.invalid'),
@@ -35,10 +46,65 @@ insert into payment_attempts(payment_intent_id,tenant_id,provider,provider_payme
   ('aa400000-0000-0000-0000-000000000002','aaaaaaaa-0000-0000-0000-000000000001','asaas','pay-concurrent','pending'),
   ('bb400000-0000-0000-0000-000000000002','bbbbbbbb-0000-0000-0000-000000000002','asaas','pay-b','pending');
 
+-- Declarative and trigger-backed tenant integrity for every financial parent.
+insert into subscriptions(id,billing_account_id,tenant_id,customer_id,provider_account_id,provider,status)
+values ('aa500000-0000-0000-0000-000000000001','aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa100000-0000-0000-0000-000000000001','aa200000-0000-0000-0000-000000000001','asaas','active');
+insert into invoices(id,billing_account_id,tenant_id,customer_id,subscription_id,amount_cents,description,status)
+values ('aa300000-0000-0000-0000-000000000020','aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa100000-0000-0000-0000-000000000001','aa500000-0000-0000-0000-000000000001',5000,'Coherent relations','open');
+select pg_temp.assert_true((select billing_account_id='aa000000-0000-0000-0000-000000000001' from invoices where id='aa300000-0000-0000-0000-000000000020'),'coherent tenant A invoice accepted');
+
+select pg_temp.assert_rejected($sql$
+  insert into invoices(id,billing_account_id,tenant_id,customer_id,amount_cents,description)
+  values ('aa300000-0000-0000-0000-000000000021','bb000000-0000-0000-0000-000000000002','aaaaaaaa-0000-0000-0000-000000000001','aa100000-0000-0000-0000-000000000001',5000,'Cross account')
+$sql$,'tenant A invoice accepted tenant B account');
+select pg_temp.assert_rejected($sql$
+  insert into subscriptions(id,billing_account_id,tenant_id,customer_id,provider_account_id,provider)
+  values ('aa500000-0000-0000-0000-000000000002','aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa100000-0000-0000-0000-000000000001','bb200000-0000-0000-0000-000000000002','asaas')
+$sql$,'tenant A subscription accepted tenant B provider account');
+select pg_temp.assert_rejected($sql$
+  insert into subscriptions(id,billing_account_id,tenant_id,customer_id,provider)
+  values ('aa500000-0000-0000-0000-000000000003','bb000000-0000-0000-0000-000000000002','aaaaaaaa-0000-0000-0000-000000000001','aa100000-0000-0000-0000-000000000001','asaas')
+$sql$,'tenant A subscription accepted tenant B billing account');
+select pg_temp.assert_rejected($sql$
+  insert into payment_intents(id,billing_account_id,tenant_id,invoice_id,provider_account_id,provider,amount_cents,idempotency_key)
+  values ('aa400000-0000-0000-0000-000000000020','bb000000-0000-0000-0000-000000000002','aaaaaaaa-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000020','aa200000-0000-0000-0000-000000000001','asaas',5000,'cross-account-intent')
+$sql$,'tenant A intent accepted tenant B billing account');
+select pg_temp.assert_rejected($sql$
+  insert into payments(id,billing_account_id,tenant_id,invoice_id,provider,provider_payment_id,amount_cents)
+  values ('aa600000-0000-0000-0000-000000000020','bb000000-0000-0000-0000-000000000002','aaaaaaaa-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000020','asaas','cross-account-payment',5000)
+$sql$,'tenant A payment accepted tenant B billing account');
+select pg_temp.assert_rejected($sql$
+  insert into payments(id,billing_account_id,tenant_id,invoice_id,payment_intent_id,provider,provider_payment_id,amount_cents)
+  values ('aa600000-0000-0000-0000-000000000021','aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000020','bb400000-0000-0000-0000-000000000002','asaas','cross-intent-payment',5000)
+$sql$,'tenant A payment accepted tenant B payment intent');
+select pg_temp.assert_rejected($sql$
+  insert into billing_customers(id,billing_account_id,tenant_id,user_id,name)
+  values ('aa100000-0000-0000-0000-000000000020','aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','b2000000-0000-0000-0000-000000000002','Cross user')
+$sql$,'tenant A customer accepted tenant B user');
+select pg_temp.assert_rejected($sql$
+  insert into webhook_events(provider,provider_event_id,event_type,payload,tenant_id,invoice_id,status)
+  values ('asaas','cross-webhook','PAYMENT_RECEIVED','{}','aaaaaaaa-0000-0000-0000-000000000001','bb300000-0000-0000-0000-000000000002','processing')
+$sql$,'tenant A webhook accepted tenant B invoice');
+
+do $$
+begin
+  begin
+    insert into invoices(id,billing_account_id,tenant_id,customer_id,amount_cents,description)
+    values ('aa300000-0000-0000-0000-000000000022','aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa100000-0000-0000-0000-000000000001',5000,'Rollback parent');
+    insert into payment_intents(billing_account_id,tenant_id,invoice_id,provider,amount_cents,idempotency_key)
+    values ('bb000000-0000-0000-0000-000000000002','aaaaaaaa-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000022','asaas',5000,'rollback-cross-tenant');
+    raise exception 'cross-tenant transaction accepted';
+  exception when others then
+    if sqlerrm = 'cross-tenant transaction accepted' then raise; end if;
+  end;
+  perform pg_temp.assert_true(not exists(select 1 from invoices where id='aa300000-0000-0000-0000-000000000022'),'cross-tenant failure left a partial invoice');
+end;
+$$;
+
 -- RLS: each authenticated fixture sees only its own tenant and cannot mutate B from A.
 set role authenticated;
 select set_config('request.jwt.claim.sub','10000000-0000-0000-0000-000000000001',false);
-select pg_temp.assert_true((select count(*) = 2 from invoices),'tenant A reads only its two invoices');
+select pg_temp.assert_true((select count(*) = 3 from invoices),'tenant A reads only its three invoices');
 select pg_temp.assert_true(not exists(select 1 from invoices where tenant_id='bbbbbbbb-0000-0000-0000-000000000002'),'tenant A cannot read tenant B');
 update invoices set description='forbidden' where id='bb300000-0000-0000-0000-000000000002';
 select pg_temp.assert_true(not exists(select 1 from invoices where description='forbidden'),'tenant A cannot alter tenant B');
