@@ -62,7 +62,7 @@ jobs:
             echo "MIGRATION REPLAY: FAIL (expected 27 files, found ${#migrations[@]})"
             exit 1
           fi
-          for expected in $(seq -w 1 27); do
+          for expected in {001..027}; do
             migration=$(printf '%s\n' "${migrations[@]}" | grep "/${expected}_" || true)
             if [[ -z "$migration" ]]; then
               echo "MIGRATION REPLAY: FAIL (missing ${expected})"
