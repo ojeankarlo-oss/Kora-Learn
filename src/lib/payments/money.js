@@ -25,7 +25,7 @@ export const MONEY_SCHEMA = Object.freeze({
   additionalProperties: false,
   required: ["amount", "currency"],
   properties: {
-    amount: { type: "integer", minimum: 0, description: "Integer minor units; never a floating point amount." },
+    amount: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: "Integer minor units; never a floating point amount." },
     currency: { type: "string", enum: ["BRL", "USD", "EUR"] },
   },
 });

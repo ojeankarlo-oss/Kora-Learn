@@ -6,6 +6,8 @@ export const MAX_REQUEST_BODY_BYTES = 64 * 1024;
 export const MAX_REQUEST_ID_LENGTH = 128;
 export const MAX_IDEMPOTENCY_KEY_LENGTH = 128;
 const SAFE_REQUEST_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+const VALID_ACCESS = new Set(["public", "protected"]);
+const VALID_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 /** @type {string[]} */
 const EMPTY_ALLOWLIST = [];
 
@@ -87,27 +89,68 @@ export function validateIdempotencyKey(value, options = {}) {
   return validateIdempotencyHeader(value, options);
 }
 
+function invalidRequest(message = "Request validation failed") {
+  return { ok: false, status: 400, code: "invalid_request", message };
+}
+
+export async function readBodyWithinLimit(req, maxBytes = MAX_REQUEST_BODY_BYTES) {
+  const contentLength = req.headers.get("content-length");
+  if (contentLength !== null) {
+    if (!/^\d+$/.test(contentLength)) return invalidRequest("Request validation failed");
+    try {
+      if (BigInt(contentLength) > BigInt(maxBytes)) return invalidRequest("Request body is too large");
+    } catch {
+      return invalidRequest("Request validation failed");
+    }
+  }
+
+  if (!req.body) return { ok: true, bytes: new Uint8Array() };
+  const reader = req.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+      total += chunk.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel("request_body_too_large").catch(() => {});
+        return invalidRequest("Request body is too large");
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return { ok: true, bytes };
+}
+
 export async function parseJsonBody(req, { allowedFields = null, maxBytes = MAX_REQUEST_BODY_BYTES } = {}) {
   const contentType = req.headers.get("content-type") || "";
   if (!/^application\/json(?:\s*;|$)/i.test(contentType)) {
-    return { ok: false, status: 400, code: "invalid_request", message: "Content-Type must be application/json" };
+    return invalidRequest("Content-Type must be application/json");
   }
-  const raw = await req.text();
-  if (new TextEncoder().encode(raw).byteLength > maxBytes) {
-    return { ok: false, status: 400, code: "invalid_request", message: "Request body is too large" };
-  }
+  const body = await readBodyWithinLimit(req, maxBytes);
+  if (!body.ok) return body;
   let value;
   try {
-    value = JSON.parse(raw);
+    value = new TextDecoder("utf-8", { fatal: true }).decode(body.bytes);
+    value = JSON.parse(value);
   } catch {
-    return { ok: false, status: 400, code: "invalid_request", message: "Request validation failed" };
+    return invalidRequest("Request validation failed");
   }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return { ok: false, status: 400, code: "invalid_request", message: "Request validation failed" };
-  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return invalidRequest("Request validation failed");
   if (allowedFields) {
     const unknown = Object.keys(value).find((field) => !allowedFields.has(field));
-    if (unknown) return { ok: false, status: 400, code: "invalid_request", message: "Request validation failed" };
+    if (unknown) return invalidRequest("Request validation failed");
   }
   return { ok: true, value };
 }
@@ -115,6 +158,36 @@ export async function parseJsonBody(req, { allowedFields = null, maxBytes = MAX_
 export function rejectTenantAuthority(input) {
   const result = rejectCallerTenantOverride(input);
   return result.ok ? result : { ok: false, code: result.code, message: "Request validation failed", status: 400 };
+}
+
+export function validateRouteRegistry(routes) {
+  if (!routes || typeof routes !== "object" || Array.isArray(routes)) {
+    return { ok: false, code: "invalid_route_registry", message: "Invalid route registry" };
+  }
+  for (const [path, methods] of Object.entries(routes)) {
+    if (!path.startsWith(`${API_ROOT}/`) && path !== API_ROOT) return { ok: false, code: "invalid_route_registry", message: "Invalid route path" };
+    if (!methods || typeof methods !== "object" || Array.isArray(methods)) return { ok: false, code: "invalid_route_registry", message: "Invalid route methods" };
+    for (const [method, definition] of Object.entries(methods)) {
+      if (!VALID_METHODS.has(method)) return { ok: false, code: "invalid_route_registry", message: "Invalid route method" };
+      if (!definition || typeof definition !== "object" || !VALID_ACCESS.has(definition.access)) {
+        return { ok: false, code: "invalid_route_registry", message: "Route access must be public or protected" };
+      }
+      if (definition.requestId !== true) return { ok: false, code: "invalid_route_registry", message: "Route request_id declaration missing" };
+      if (!Array.isArray(definition.responses) || !definition.responses.includes(200)) {
+        return { ok: false, code: "invalid_route_registry", message: "Route response contract missing" };
+      }
+      if (typeof definition.responseSchema !== "string" || !definition.responseSchema) {
+        return { ok: false, code: "invalid_route_registry", message: "Route response schema missing" };
+      }
+    }
+  }
+  return { ok: true, value: routes };
+}
+
+export function assertValidRouteRegistry(routes) {
+  const result = validateRouteRegistry(routes);
+  if (!result.ok) throw new Error(result.message);
+  return routes;
 }
 
 function requestForAuth(req, requestId) {
@@ -132,7 +205,7 @@ function publicAuthError(req, authResult, requestId, allowlist) {
 
 /**
  * @typedef {{
- *   routes?: Record<string, Record<string, {auth?: boolean, scope?: string, rateLimit?: boolean}>>,
+ *   routes?: Record<string, Record<string, {access: string, scope?: string, requestId: boolean, responses: number[], responseSchema: string, rateLimit?: boolean}>>,
  *   handlers?: Record<string, Record<string, Function>>,
  *   repository?: object,
  *   rateLimiter?: {consume: (key: string) => Promise<{allowed: boolean, remaining?: number, retryAfterSeconds?: number}>} | null,
@@ -150,25 +223,25 @@ export async function runPaymentsPipeline(req, {
   now = new Date(),
 } = {}) {
   const requestId = requestIdFromRequest(req);
+  const registry = validateRouteRegistry(routes);
+  if (!registry.ok) return errorResponse(req, 500, "internal_error", "Internal server error", requestId, [], allowlist);
   const url = new URL(req.url);
   const path = normalizePath(url.pathname);
-  const route = routes?.[path];
+  const route = routes[path];
 
+  if (!route) return errorResponse(req, 404, "resource_not_found", "Resource not found", requestId, [], allowlist);
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: { ...corsHeaders(req, allowlist), "X-Request-Id": requestId } });
   }
-  if (!route) return errorResponse(req, 404, "resource_not_found", "Resource not found", requestId, [], allowlist);
   if (!route[req.method]) {
     const allow = Object.keys(route).join(", ");
-    return new Response(JSON.stringify(errorBody("invalid_request", "Method not allowed", requestId, [])), {
-      status: 405,
-      headers: { ...baseHeaders(req, requestId, allowlist), Allow: allow },
-    });
+    return methodNotAllowed(req, requestId, allow, allowlist);
   }
 
   const definition = route[req.method];
+  const isProtected = definition.access === "protected";
   let authResult = { ok: true, context: null };
-  if (definition.auth) {
+  if (isProtected) {
     const authorityInput = {};
     const headerTenant = req.headers.get("x-tenant-id");
     const headerTenantId = req.headers.get("x-tenantid");

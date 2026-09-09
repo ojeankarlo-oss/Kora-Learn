@@ -130,7 +130,8 @@ components:
         amount:
           type: integer
           minimum: 0
-          description: Integer minor units. Floating point values are forbidden.
+          maximum: 9007199254740991
+          description: Integer minor units. Floating point values are forbidden; BRL 12990 represents R$129,90.
         currency:
           $ref: '#/components/schemas/Currency'
     Currency:

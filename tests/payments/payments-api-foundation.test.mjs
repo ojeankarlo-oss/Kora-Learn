@@ -1,16 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildCredentialRecord } from "../../src/lib/payments/credential.js";
-import { parseMoney } from "../../src/lib/payments/money.js";
+import { readFileSync } from "node:fs";
+import { parse } from "yaml";
+import { validatePaymentsOpenApi } from "../../scripts/validate-payments-openapi.mjs";
+import { MONEY_SCHEMA, parseMoney } from "../../src/lib/payments/money.js";
 import { idempotencyPolicy, validateIdempotencyHeader } from "../../src/lib/payments/idempotency.js";
 import { createMemoryRateLimiter, buildRateLimitKey, rateLimitPolicy } from "../../src/lib/payments/rate-limit.js";
 import {
   errorBody,
   parseJsonBody,
+  readBodyWithinLimit,
   rejectTenantAuthority,
   runPaymentsPipeline,
+  validateRouteRegistry,
 } from "../../src/lib/payments/http.js";
-import { PAYMENTS_API_ROUTES } from "../../src/lib/payments/api-contract.js";
+import { FUTURE_FINANCIAL_PATHS, PAYMENTS_API_ROUTES } from "../../src/lib/payments/api-contract.js";
 
 const tenantId = "11111111-1111-4111-8111-111111111111";
 const applicationId = "22222222-2222-4222-8222-222222222222";
@@ -48,7 +53,7 @@ async function fixture({ status = "active", provenance = "server_csprng_v1", sco
 function protectedContract({ scope = "payments:read", rateLimit = false } = {}) {
   return {
     ...PAYMENTS_API_ROUTES,
-    "/v1/protected": { GET: { auth: true, scope, rateLimit } },
+    "/v1/protected": { GET: { access: "protected", scope, rateLimit, requestId: true, responses: [200, 401, 403, 405, 500], responseSchema: "HealthResponse" } },
   };
 }
 
@@ -134,6 +139,79 @@ test("request validation rejeita JSON inválido, content type e unknown fields",
   assert.equal(rejectTenantAuthority({ tenantId: "other", routeTenant: "other" }).ok, false);
 });
 
+test("body limit é aplicado durante leitura, inclusive sem Content-Length e com UTF-8", async () => {
+  const below = await readBodyWithinLimit(new Request("https://payments.test/v1/protected", { method: "POST", body: "x".repeat(64 * 1024 - 1) }));
+  assert.equal(below.ok, true);
+  assert.equal(below.bytes.byteLength, 64 * 1024 - 1);
+  const exact = await readBodyWithinLimit(new Request("https://payments.test/v1/protected", { method: "POST", body: "x".repeat(64 * 1024) }));
+  assert.equal(exact.ok, true);
+  const above = await readBodyWithinLimit(new Request("https://payments.test/v1/protected", { method: "POST", body: "x".repeat(64 * 1024 + 1) }));
+  assert.equal(above.ok, false);
+  const lyingLength = await readBodyWithinLimit(new Request("https://payments.test/v1/protected", { method: "POST", headers: { "content-length": "1" }, body: "x".repeat(100) }), 50);
+  assert.equal(lyingLength.ok, false);
+  const euro = "€".repeat(21845);
+  const utf8 = await readBodyWithinLimit(new Request("https://payments.test/v1/protected", { method: "POST", body: euro }), 64 * 1024);
+  assert.equal(utf8.ok, true);
+  const utf8Above = await readBodyWithinLimit(new Request("https://payments.test/v1/protected", { method: "POST", body: `${euro}€` }), 64 * 1024);
+  assert.equal(utf8Above.ok, false);
+});
+
+test("OPTIONS só responde para rota conhecida e duplicate security headers falham fechado", async () => {
+  const state = await fixture();
+  const preflight = await runPaymentsPipeline(new Request("https://payments.test/v1/health", { method: "OPTIONS" }), {
+    routes: PAYMENTS_API_ROUTES, handlers: protectedHandler(), repository: state.repository,
+  });
+  assert.equal(preflight.status, 204);
+  const unknownPreflight = await runPaymentsPipeline(new Request("https://payments.test/v1/nope", { method: "OPTIONS" }), {
+    routes: PAYMENTS_API_ROUTES, handlers: protectedHandler(), repository: state.repository,
+  });
+  assert.equal(unknownPreflight.status, 404);
+  const duplicateAuth = await runPaymentsPipeline(new Request("https://payments.test/v1/protected", { headers: [["authorization", `Bearer ${state.secret}`], ["authorization", "Bearer other"]] }), {
+    routes: protectedContract(), handlers: protectedHandler(), repository: state.repository,
+  });
+  assert.equal(duplicateAuth.status, 401);
+  const duplicateContentType = await parseJsonBody(new Request("https://payments.test/v1/protected", { method: "POST", headers: [["content-type", "application/json"], ["content-type", "text/plain"]], body: "{}" }));
+  assert.equal(duplicateContentType.ok, false);
+});
+
+test("registry exige access explícito e impede future routes públicas por omissão", () => {
+  assert.equal(PAYMENTS_API_ROUTES["/v1"].GET.access, "public");
+  assert.equal(PAYMENTS_API_ROUTES["/v1/health"].GET.access, "public");
+  assert.equal(FUTURE_FINANCIAL_PATHS.every((path) => !Object.hasOwn(PAYMENTS_API_ROUTES, path)), true);
+  const invalid = { "/v1/forgotten": { GET: { requestId: true, responses: [200], responseSchema: "HealthResponse" } } };
+  assert.equal(validateRouteRegistry(invalid).ok, false);
+  assert.equal(validateRouteRegistry({ "/v1/protected": { GET: { access: "protected", requestId: true, responses: [200], responseSchema: "HealthResponse" } } }).ok, true);
+});
+
+test("contract drift falha para auth protegida, status, schema, path e método divergentes", () => {
+  const specPath = new URL("../../docs/openapi/kora-payments-v1.yaml", import.meta.url);
+  const spec = parse(readFileSync(specPath, "utf8"));
+  const protectedRoutes = {
+    ...PAYMENTS_API_ROUTES,
+    "/v1/protected": { GET: { access: "protected", requestId: true, responses: [200, 401, 403, 500], responseSchema: "HealthResponse" } },
+  };
+  const protectedSpec = structuredClone(spec);
+  protectedSpec.paths["/v1/protected"] = { get: { security: [], parameters: [{ $ref: "#/components/parameters/RequestId" }], responses: {
+    "200": { description: "ok", content: { "application/json": { schema: { $ref: "#/components/schemas/HealthResponse" } } } },
+    "401": { description: "error", content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+    "403": { description: "error", content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+    "500": { description: "error", content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } } },
+  } } };
+  assert.throws(() => validatePaymentsOpenApi(protectedSpec, protectedRoutes), /M2MBearer/);
+  const missingStatus = structuredClone(spec);
+  delete missingStatus.paths["/v1/health"].get.responses["500"];
+  assert.throws(() => validatePaymentsOpenApi(missingStatus), /status 500/);
+  const missingSchema = structuredClone(spec);
+  delete missingSchema.components.schemas.ErrorResponse;
+  assert.throws(() => validatePaymentsOpenApi(missingSchema), /ErrorResponse/);
+  const missingPath = structuredClone(spec);
+  delete missingPath.paths["/v1"];
+  assert.throws(() => validatePaymentsOpenApi(missingPath), /missing path/);
+  const wrongMethod = structuredClone(spec);
+  wrongMethod.paths["/v1"].post = wrongMethod.paths["/v1"].get;
+  assert.throws(() => validatePaymentsOpenApi(wrongMethod), /spec method has no implementation/);
+});
+
 test("scope ausente falha com 403 após auth válida", async () => {
   const state = await fixture({ scopes: [] });
   const response = await runPaymentsPipeline(new Request("https://payments.test/v1/protected", { headers: { authorization: `Bearer ${state.secret}` } }), {
@@ -170,6 +248,9 @@ test("handler failure não vaza stack, SQL, secret ou internals", async () => {
 
 test("money rejeita float e aceita minor units inteiras/currency válida", () => {
   assert.equal(parseMoney({ amount: 12990, currency: "BRL" }).ok, true);
+  assert.equal(parseMoney({ amount: Number.MAX_SAFE_INTEGER, currency: "BRL" }).ok, true);
+  assert.equal(parseMoney({ amount: Number.MAX_SAFE_INTEGER + 1, currency: "BRL" }).ok, false);
+  assert.equal(MONEY_SCHEMA.properties.amount.maximum, Number.MAX_SAFE_INTEGER);
   assert.equal(parseMoney({ amount: 129.9, currency: "BRL" }).ok, false);
   assert.equal(parseMoney({ amount: 12990, currency: "XYZ" }).ok, false);
 });

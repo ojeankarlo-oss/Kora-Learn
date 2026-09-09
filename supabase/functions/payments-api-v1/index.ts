@@ -1,5 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { runPaymentsPipeline, sanitizeRequestId } from "../../../src/lib/payments/http.js";
+import { assertValidRouteRegistry, runPaymentsPipeline, sanitizeRequestId } from "../../../src/lib/payments/http.js";
 import { createPaymentsRepository } from "../../../src/lib/payments/supabase-repository.js";
 import { PAYMENTS_API_METADATA, PAYMENTS_API_ROUTES } from "../../../src/lib/payments/api-contract.js";
 
@@ -8,13 +8,14 @@ const allowlist = (Deno.env.get("PAYMENTS_API_CORS_ORIGINS") || "")
   .split(",")
   .map((value) => value.trim())
   .filter(Boolean);
+const routes = assertValidRouteRegistry(PAYMENTS_API_ROUTES);
 
 function logEvent(event: string, fields: Record<string, unknown> = {}) {
   console.log(JSON.stringify({ service: "payments-api-v1", event, ...fields }));
 }
 
 function routesFor() {
-  return PAYMENTS_API_ROUTES;
+  return routes;
 }
 
 function handlersFor(prefix: string) {

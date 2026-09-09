@@ -1,6 +1,10 @@
 export const PAYMENTS_API_ROUTES = Object.freeze({
-  "/v1": Object.freeze({ GET: Object.freeze({ auth: false }) }),
-  "/v1/health": Object.freeze({ GET: Object.freeze({ auth: false }) }),
+  "/v1": Object.freeze({
+    GET: Object.freeze({ access: "public", requestId: true, responses: [200, 405, 500], responseSchema: "MetadataResponse" }),
+  }),
+  "/v1/health": Object.freeze({
+    GET: Object.freeze({ access: "public", requestId: true, responses: [200, 405, 500], responseSchema: "HealthResponse" }),
+  }),
 });
 
 export const PAYMENTS_API_METADATA = Object.freeze({
