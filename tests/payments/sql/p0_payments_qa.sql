@@ -154,6 +154,45 @@ select process_asaas_webhook_atomic('asaas','aa200000-0000-0000-0000-00000000000
 select pg_temp.assert_true((select status='paid' from invoices where id='aa300000-0000-0000-0000-000000000001'),'atomic RPC settled invoice');
 select pg_temp.assert_true((select count(*)=1 from payments where invoice_id='aa300000-0000-0000-0000-000000000001'),'atomic RPC created exactly one payment');
 
+-- A retry is duplicate; a different supported event for the same settled payment is auditable but does not settle twice.
+select pg_temp.assert_true((process_asaas_webhook_atomic('asaas','aa200000-0000-0000-0000-000000000001','aa400000-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000001','pay-atomic','PAYMENT_RECEIVED',10000,'BRL','{}')->>'duplicate')::boolean,'PAYMENT_RECEIVED retry was not duplicate');
+select pg_temp.assert_true((process_asaas_webhook_atomic('asaas','aa200000-0000-0000-0000-000000000001','aa400000-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000001','pay-atomic','PAYMENT_CONFIRMED',10000,'BRL','{}')->>'successive_event')::boolean,'PAYMENT_RECEIVED to PAYMENT_CONFIRMED was not accepted');
+select pg_temp.assert_true((process_asaas_webhook_atomic('asaas','aa200000-0000-0000-0000-000000000001','aa400000-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000001','pay-atomic','PAYMENT_CONFIRMED',10000,'BRL','{}')->>'duplicate')::boolean,'PAYMENT_CONFIRMED retry was not duplicate');
+select pg_temp.assert_true((select count(*)=1 from payments where provider='asaas' and provider_payment_id='pay-atomic'),'successive event created a second payment');
+select pg_temp.assert_true((select count(*)=1 from billing_events where aggregate_id='aa300000-0000-0000-0000-000000000001' and event_type='payment.paid'),'successive event created a second settlement');
+select pg_temp.assert_true((select count(*)=2 from webhook_events where provider='asaas' and provider_payment_id='pay-atomic' and status='processed'),'successive events are not separately auditable');
+
+-- The inverse arrival order is supported with the same materialized result.
+insert into payment_intents(id,billing_account_id,tenant_id,invoice_id,provider_account_id,provider,amount_cents,status,idempotency_key)
+values ('aa400000-0000-0000-0000-000000000020','aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000020','aa200000-0000-0000-0000-000000000001','asaas',5000,'pending','progression-inverse');
+insert into payment_attempts(payment_intent_id,tenant_id,provider,provider_payment_id,status)
+values ('aa400000-0000-0000-0000-000000000020','aaaaaaaa-0000-0000-0000-000000000001','asaas','pay-inverse','pending');
+select process_asaas_webhook_atomic('asaas','aa200000-0000-0000-0000-000000000001','aa400000-0000-0000-0000-000000000020','aa300000-0000-0000-0000-000000000020','pay-inverse','PAYMENT_CONFIRMED',5000,'BRL','{}');
+select pg_temp.assert_true((process_asaas_webhook_atomic('asaas','aa200000-0000-0000-0000-000000000001','aa400000-0000-0000-0000-000000000020','aa300000-0000-0000-0000-000000000020','pay-inverse','PAYMENT_RECEIVED',5000,'BRL','{}')->>'successive_event')::boolean,'PAYMENT_CONFIRMED to PAYMENT_RECEIVED was not accepted');
+select pg_temp.assert_true((select count(*)=1 from payments where provider='asaas' and provider_payment_id='pay-inverse'),'inverse progression created a second payment');
+select pg_temp.assert_true((select count(*)=2 from webhook_events where provider='asaas' and provider_payment_id='pay-inverse' and status='processed'),'inverse progression events are not separately auditable');
+
+-- Correlation conflicts reject and leave no event, payment, or settlement residue.
+insert into invoices(id,billing_account_id,tenant_id,customer_id,amount_cents,description,status)
+values ('aa300000-0000-0000-0000-000000000023','aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa100000-0000-0000-0000-000000000001',10000,'Progression conflict','open');
+insert into payment_intents(id,billing_account_id,tenant_id,invoice_id,provider_account_id,provider,amount_cents,status,idempotency_key) values
+  ('aa400000-0000-0000-0000-000000000023','aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000023','aa200000-0000-0000-0000-000000000001','asaas',10000,'pending','progression-invoice-conflict'),
+  ('aa400000-0000-0000-0000-000000000024','aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000001','aa200000-0000-0000-0000-000000000001','asaas',10000,'pending','progression-intent-conflict');
+insert into payment_attempts(payment_intent_id,tenant_id,provider,provider_payment_id,status) values
+  ('aa400000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','asaas','pay-other','pending'),
+  ('aa400000-0000-0000-0000-000000000023','aaaaaaaa-0000-0000-0000-000000000001','asaas','pay-atomic','pending'),
+  ('aa400000-0000-0000-0000-000000000024','aaaaaaaa-0000-0000-0000-000000000001','asaas','pay-atomic','pending'),
+  ('bb400000-0000-0000-0000-000000000002','bbbbbbbb-0000-0000-0000-000000000002','asaas','pay-atomic','pending');
+select pg_temp.assert_rejected($sql$select process_asaas_webhook_atomic('asaas','aa200000-0000-0000-0000-000000000001','aa400000-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000001','pay-other','PAYMENT_CONFIRMED',10000,'BRL','{}')$sql$,'different external payment ID accepted after settlement');
+select pg_temp.assert_rejected($sql$select process_asaas_webhook_atomic('asaas','aa200000-0000-0000-0000-000000000001','aa400000-0000-0000-0000-000000000023','aa300000-0000-0000-0000-000000000023','pay-atomic','PAYMENT_CONFIRMED',10000,'BRL','{}')$sql$,'different invoice accepted for materialized payment');
+select pg_temp.assert_rejected($sql$select process_asaas_webhook_atomic('asaas','aa200000-0000-0000-0000-000000000001','aa400000-0000-0000-0000-000000000024','aa300000-0000-0000-0000-000000000001','pay-atomic','PAYMENT_CONFIRMED',10000,'BRL','{}')$sql$,'different intent accepted for materialized payment');
+select pg_temp.assert_rejected($sql$select process_asaas_webhook_atomic('asaas','bb200000-0000-0000-0000-000000000002','bb400000-0000-0000-0000-000000000002','bb300000-0000-0000-0000-000000000002','pay-atomic','PAYMENT_CONFIRMED',10000,'BRL','{}')$sql$,'cross-tenant event accepted for materialized payment');
+select pg_temp.assert_true((select count(*)=1 from payments where provider='asaas' and provider_payment_id='pay-atomic'),'conflict left an extra payment');
+select pg_temp.assert_true((select count(*)=2 from webhook_events where provider='asaas' and provider_payment_id='pay-atomic'),'conflict left a webhook event');
+select pg_temp.assert_true(not exists(select 1 from webhook_events where provider_payment_id='pay-other'),'external ID conflict left a webhook event');
+select pg_temp.assert_true((select status='open' from invoices where id='aa300000-0000-0000-0000-000000000023'),'invoice conflict left a partial settlement');
+select pg_temp.assert_true((select status='open' from invoices where id='bb300000-0000-0000-0000-000000000002'),'cross-tenant conflict left a partial settlement');
+
 -- Forbidden state transitions executed directly in PostgreSQL.
 update payments set status='refunded' where invoice_id='aa300000-0000-0000-0000-000000000001';
 insert into invoices(id,billing_account_id,tenant_id,customer_id,amount_cents,description,status) values
@@ -170,3 +209,4 @@ select 'ATOMIC RPC REAL: PASS' as result;
 select 'ROLLBACK REAL: PASS' as result;
 select 'STATE MACHINE REAL: PASS' as result;
 select 'EXTERNAL CORRELATION REAL: PASS' as result;
+select 'SUCCESSIVE WEBHOOK EVENTS REAL: PASS' as result;

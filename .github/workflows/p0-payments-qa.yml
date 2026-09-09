@@ -53,16 +53,16 @@ jobs:
       - name: Bootstrap disposable Supabase compatibility schemas
         run: psql -v ON_ERROR_STOP=1 -f tests/payments/sql/bootstrap.sql
 
-      - name: Replay canonical migrations 001 through 029
+      - name: Replay canonical migrations 001 through 030
         shell: bash
         run: |
           set -euo pipefail
           mapfile -t migrations < <(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | sort)
-          if [[ ${#migrations[@]} -ne 29 ]]; then
-            echo "MIGRATION REPLAY: FAIL (expected 29 files, found ${#migrations[@]})"
+          if [[ ${#migrations[@]} -ne 30 ]]; then
+            echo "MIGRATION REPLAY: FAIL (expected 30 files, found ${#migrations[@]})"
             exit 1
           fi
-          for expected in {001..029}; do
+          for expected in {001..030}; do
             migration=$(printf '%s\n' "${migrations[@]}" | grep "/${expected}_" || true)
             if [[ -z "$migration" ]]; then
               echo "MIGRATION REPLAY: FAIL (missing ${expected})"
