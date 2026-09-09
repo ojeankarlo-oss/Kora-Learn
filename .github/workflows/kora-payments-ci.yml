@@ -113,6 +113,9 @@ jobs:
       - name: Run real PostgreSQL payment invariants
         run: psql -v ON_ERROR_STOP=1 -f tests/payments/sql/p0_payments_qa.sql
 
+      - name: Run PostgreSQL Payments API auth invariants
+        run: psql -v ON_ERROR_STOP=1 -f tests/payments/sql/p1_pay_api_auth_qa.sql
+
       - name: Run webhook concurrency with two connections
         shell: bash
         run: bash tests/payments/sql/concurrency.sh
@@ -123,6 +126,9 @@ jobs:
 
       - name: Run Node payment tests
         run: npm ci && npm run test:payments
+
+      - name: Run Node Payments API auth tests
+        run: npm run test:payments:auth
 
       - name: Deno check Payments Edge Functions
         run: |

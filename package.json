@@ -10,6 +10,7 @@
     "check:encoding": "node scripts/check-utf8.mjs",
     "test:p0:boundaries": "node scripts/kora-p0-tenant-boundaries.mjs",
     "test:payments": "node --test tests/payments/*.test.mjs",
+    "test:payments:auth": "node --test tests/payments/payment-api-auth.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
