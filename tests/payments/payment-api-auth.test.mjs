@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   buildCredentialRecord,
   generateCredential,
@@ -31,6 +32,7 @@ async function fixture({ seed = 1, applicationStatus = "active", tenantActive = 
     environment: built.environment,
     credential_hash: built.credentialHash,
     public_prefix: built.publicPrefix,
+    credential_provenance: "server_csprng_v1",
     status,
     revoked_at: status === "revoked" ? "2026-09-09T00:01:00Z" : null,
     expires_at: expiresAt,
@@ -95,13 +97,13 @@ test("credencial inválida, revogada e expirada falham de forma sanitizada", asy
 test("application desativada e tenant inativo falham fechado", async () => {
   const inactiveApplication = await fixture({ applicationStatus: "suspended" });
   const applicationResult = await authenticatePaymentCredential({ credential: inactiveApplication.secret, repository: inactiveApplication.repository });
-  assert.equal(applicationResult.status, 403);
-  assert.equal(applicationResult.code, "application_inactive");
+  assert.equal(applicationResult.status, 401);
+  assert.equal(applicationResult.code, "invalid_credential");
 
   const inactiveTenant = await fixture({ tenantActive: false });
   const tenantResult = await authenticatePaymentCredential({ credential: inactiveTenant.secret, repository: inactiveTenant.repository });
-  assert.equal(tenantResult.status, 403);
-  assert.equal(tenantResult.code, "tenant_inactive");
+  assert.equal(tenantResult.status, 401);
+  assert.equal(tenantResult.code, "invalid_credential");
 });
 
 test("scope permitido passa e scope ausente retorna 403", async () => {
@@ -178,7 +180,7 @@ test("auditoria local não serializa credential ou Authorization header", async 
 test("credential generation uses public prefix without making the secret recoverable", () => {
   const generated = generateCredential({ environment: "production", randomBytesImpl: fixedRandomBytes(3) });
   assert.match(generated.secret, /^kp_production_/);
-  assert.match(generated.publicPrefix, /^kp_production_[A-Za-z0-9_-]{8,12}$/);
+  assert.match(generated.publicPrefix, /^kp_production_[a-f0-9]{16}$/);
   assert.equal(generated.publicPrefix.length < generated.secret.length, true);
 });
 
@@ -193,4 +195,37 @@ test("application e scopes são normalizados por helper reutilizável", async ()
   assert.equal(hasScope(scopes, "refunds:write"), false);
   assert.throws(() => normalizeApplication({ tenantId: "tenant-a", name: "ENEM", slug: "bad slug" }), /Slug/);
   assert.throws(() => normalizeScopes(["not-a-scope"]), /Scope/);
+});
+
+
+test("credential legacy_unverified falha fechado mesmo com hash correto", async () => {
+  const state = await fixture();
+  const legacy = { ...state.record, credential_provenance: "legacy_unverified" };
+  const legacyRepository = { ...state.repository, async findCredentialByHash(hash) { return hash === legacy.credential_hash ? legacy : null; } };
+  const result = await authenticatePaymentCredential({ credential: state.secret, repository: legacyRepository });
+  assert.equal(result.status, 401);
+  assert.equal(result.code, "invalid_credential");
+  assert.equal(state.audits[0].reason, "unverified_provenance");
+});
+
+test("causas de inatividade não são enumeradas na resposta externa", async () => {
+  const application = await fixture({ applicationStatus: "suspended" });
+  const tenant = await fixture({ tenantActive: false });
+  const appResult = await authenticatePaymentCredential({ credential: application.secret, repository: application.repository });
+  const tenantResult = await authenticatePaymentCredential({ credential: tenant.secret, repository: tenant.repository });
+  assert.deepEqual(
+    { status: appResult.status, code: appResult.code },
+    { status: tenantResult.status, code: tenantResult.code },
+  );
+  assert.notEqual(application.audits[0].reason, tenant.audits[0].reason);
+});
+
+test("migration 033 fecha a provenance no banco e gera o secret dentro da RPC", () => {
+  const migration = readFileSync(new URL("../../supabase/migrations/033_kora_p1_pay_api_credential_hardening.sql", import.meta.url), "utf8");
+  assert.match(migration, /gen_random_bytes\(32\)/);
+  assert.match(migration, /digest\(v_raw_secret, 'sha256'\)/);
+  assert.match(migration, /credential_provenance.*server_csprng_v1/s);
+  assert.doesNotMatch(migration, /p_secret/);
+  assert.match(migration, /revoke all on function public\.create_payment_api_credential/s);
+  assert.match(migration, /grant execute on function public\.create_payment_api_credential[\s\S]+to service_role/);
 });

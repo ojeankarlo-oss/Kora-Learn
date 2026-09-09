@@ -12,6 +12,10 @@ function bytesToBase64Url(bytes) {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
+function bytesToHex(bytes) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 function randomBytes(length) {
   const bytes = new Uint8Array(length);
   globalThis.crypto.getRandomValues(bytes);
@@ -31,14 +35,14 @@ function constantTimeEqual(left, right) {
 
 export function credentialPrefix(secret) {
   const value = String(secret || "");
-  const match = /^(kp_[a-z]+_)([A-Za-z0-9_-]{8,})$/.exec(value);
+  const match = /^kp_([a-z]+)_([a-f0-9]{16})_([A-Za-z0-9_-]{32,})$/.exec(value);
   if (!match) throw new Error("Credential inválida");
-  return `${match[1]}${match[2].slice(0, 12)}`;
+  return `kp_${match[1]}_${match[2]}`;
 }
 
 export async function hashCredential(secret) {
   const value = String(secret || "");
-  if (!/^kp_[a-z]+_[A-Za-z0-9_-]{32,}$/.test(value)) throw new Error("Credential inválida");
+  if (!/^kp_[a-z]+_[a-f0-9]{16}_[A-Za-z0-9_-]{32,}$/.test(value)) throw new Error("Credential inválida");
   const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -54,10 +58,11 @@ export async function verifyCredential(secret, expectedHash) {
 
 export function generateCredential({ environment = "sandbox", randomBytesImpl = randomBytes } = {}) {
   const mode = requireEnvironment(environment);
-  const randomPart = bytesToBase64Url(randomBytesImpl(32));
-  const secret = `kp_${mode}_${randomPart}`;
-  const publicPrefix = credentialPrefix(secret);
-  return { secret, publicPrefix, environment: mode };
+  const publicIdentifier = bytesToHex(randomBytesImpl(8));
+  const secretSuffix = bytesToBase64Url(randomBytesImpl(32));
+  const secret = `kp_${mode}_${publicIdentifier}_${secretSuffix}`;
+  const publicPrefix = `kp_${mode}_${publicIdentifier}`;
+  return { secret, publicPrefix, publicIdentifier, environment: mode };
 }
 
 export async function buildCredentialRecord({ applicationId, tenantId, environment = "sandbox", rotatedFromId = null, now = new Date(), randomBytesImpl } = {}) {
@@ -74,11 +79,13 @@ export async function buildCredentialRecord({ applicationId, tenantId, environme
     revokedAt: null,
     rotatedFromId,
     rotatedAt: rotatedFromId ? new Date(now).toISOString() : null,
+    credentialProvenance: "server_csprng_v1",
   };
 }
 
 export function isCredentialActive(record, now = new Date()) {
-  if (!record || record.status !== "active" || record.revokedAt) return false;
+  if (!record || record.credentialProvenance !== "server_csprng_v1") return false;
+  if (record.status !== "active" || record.revokedAt) return false;
   if (record.expiresAt && new Date(record.expiresAt).getTime() <= new Date(now).getTime()) return false;
   return true;
 }

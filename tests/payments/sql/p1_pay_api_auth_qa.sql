@@ -125,3 +125,157 @@ select 'P1 AUTH HASH ONLY: PASS' as result;
 select 'P1 AUTH CROSS TENANT: PASS' as result;
 select 'P1 AUTH RLS: PASS' as result;
 select 'P1 AUTH LIFECYCLE AUDIT: PASS' as result;
+
+-- P1-PAY-API-002B: canonical server-side issuance and privilege boundaries.
+select pg_temp.assert_true(
+  has_function_privilege('anon', 'public.create_payment_api_credential(uuid,text[],timestamp with time zone,text)', 'execute') = false,
+  'anon cannot issue credentials'
+);
+select pg_temp.assert_true(
+  has_function_privilege('authenticated', 'public.create_payment_api_credential(uuid,text[],timestamp with time zone,text)', 'execute') = false,
+  'authenticated cannot issue credentials'
+);
+select pg_temp.assert_true(
+  has_function_privilege('service_role', 'public.create_payment_api_credential(uuid,text[],timestamp with time zone,text)', 'execute') = true,
+  'service_role can issue credentials'
+);
+select pg_temp.assert_true(
+  has_table_privilege('anon', 'public.payment_api_credentials', 'INSERT') = false
+    and has_table_privilege('authenticated', 'public.payment_api_credentials', 'INSERT') = false,
+  'direct credential insert is blocked for public roles'
+);
+select pg_temp.assert_true(
+  not exists (
+    select 1
+    from pg_proc p
+    where p.oid = 'public.create_payment_api_credential(uuid,text[],timestamp with time zone,text)'::regprocedure
+      and coalesce(p.proargnames, array[]::text[]) && array['secret', 'raw_secret', 'credential', 'p_secret']
+  ),
+  'canonical issue function accepts no caller secret'
+);
+
+-- The canonical function accepts only application/scopes/expiry/request metadata;
+-- it generates the secret internally and returns it once in a transient result.
+select public.create_payment_api_credential(
+  'ca000000-0000-0000-0000-000000000001',
+  array['invoices:read', 'payment_intents:write'],
+  pg_catalog.now() + interval '1 day',
+  'req-issue-assert'
+) as payload
+\gset canonical_
+
+select (:'canonical_payload'::jsonb ->> 'credential_id')::uuid as credential_id,
+       (:'canonical_payload'::jsonb ->> 'secret') as secret
+\gset canonical_
+
+select pg_temp.assert_true(
+  (select credential_provenance = 'server_csprng_v1'
+     and credential_hash = encode(digest(:'canonical_secret', 'sha256'), 'hex')
+     and credential_hash <> :'canonical_secret'
+   from payment_api_credentials
+   where id = (:'canonical_credential_id')::uuid),
+  'canonical issue stores only the hash and provenance'
+);
+select pg_temp.assert_true(
+  length(:'canonical_secret') >= 70,
+  'canonical secret has public envelope plus at least 256-bit suffix'
+);
+select pg_temp.assert_true(
+  (select count(*) = 2 from payment_api_credential_scopes where credential_id = (:'canonical_credential_id')::uuid),
+  'canonical issue persists requested scopes'
+);
+select pg_temp.assert_true(
+  exists (select 1 from payment_api_audit where credential_id = (:'canonical_credential_id')::uuid and event_type = 'created' and request_id = 'req-issue-assert'),
+  'canonical issue creates an audit event'
+);
+
+select public.rotate_payment_api_credential(
+  (:'canonical_credential_id')::uuid,
+  null,
+  pg_catalog.now() + interval '2 days',
+  'req-rotate'
+) as payload
+\gset rotation_
+
+select (:'rotation_payload'::jsonb ->> 'credential_id')::uuid as credential_id,
+       (:'rotation_payload'::jsonb ->> 'secret') as secret
+\gset rotation_
+
+select pg_temp.assert_true(
+  (select status = 'revoked' from payment_api_credentials where id = (:'canonical_credential_id')::uuid),
+  'rotation revokes the old credential'
+);
+select pg_temp.assert_true(
+  (select status = 'active' and credential_provenance = 'server_csprng_v1'
+     and rotated_from_id = (:'canonical_credential_id')::uuid
+     and credential_hash = encode(digest(:'rotation_secret', 'sha256'), 'hex')
+   from payment_api_credentials
+   where id = (:'rotation_credential_id')::uuid),
+  'rotation creates a new canonical credential with matching hash'
+);
+select pg_temp.assert_true(
+  (select count(*) = 2 from payment_api_credential_scopes where credential_id = (:'rotation_credential_id')::uuid),
+  'rotation preserves scopes'
+);
+select pg_temp.assert_true(
+  (select count(*) = 1 from payment_api_credentials where application_id = 'ca000000-0000-0000-0000-000000000001' and status = 'active' and credential_provenance = 'server_csprng_v1'),
+  'one active canonical credential remains after rotation'
+);
+select pg_temp.assert_true(
+  exists (select 1 from payment_api_audit where credential_id = (:'canonical_credential_id')::uuid and event_type = 'revoked' and reason = 'rotated')
+    and exists (select 1 from payment_api_audit where credential_id = (:'rotation_credential_id')::uuid and event_type = 'rotated'),
+  'rotation audits both sides of lifecycle'
+);
+
+-- A failing rotation must roll back the old revocation and new insert.
+select public.create_payment_api_credential(
+  'db000000-0000-0000-0000-000000000002',
+  array['customers:read'],
+  pg_catalog.now() + interval '1 day',
+  'req-rollback-base'
+) as payload
+\gset rollback_
+select (:'rollback_payload'::jsonb ->> 'credential_id')::uuid as credential_id
+\gset rollback_
+
+create or replace function pg_temp.expect_invalid_rotation(p_id uuid) returns void
+language plpgsql as $$
+begin
+  begin
+    perform public.rotate_payment_api_credential(p_id, array['scope:not_real'], null, 'req-rollback-fail');
+    raise exception 'invalid scope rotation unexpectedly committed';
+  exception when others then
+    if sqlerrm = 'invalid scope rotation unexpectedly committed' then raise; end if;
+  end;
+end $$;
+select pg_temp.expect_invalid_rotation(:'rollback_credential_id'::uuid);
+
+select pg_temp.assert_true(
+  (select status = 'active' from payment_api_credentials where id = (:'rollback_credential_id')::uuid),
+  'failed rotation rolled back old credential revocation'
+);
+select pg_temp.assert_true(
+  (select count(*) = 0 from payment_api_credentials where rotated_from_id = (:'rollback_credential_id')::uuid),
+  'failed rotation created no replacement credential'
+);
+
+select public.revoke_payment_api_credential(
+  (:'rotation_credential_id')::uuid,
+  'req-revoke',
+  'operator_test'
+) as payload
+\gset revoke_
+select pg_temp.assert_true(
+  (select status = 'revoked' from payment_api_credentials where id = (:'rotation_credential_id')::uuid),
+  'canonical revocation changes status'
+);
+select pg_temp.assert_true(
+  (public.revoke_payment_api_credential((:'rotation_credential_id')::uuid, 'req-revoke-again', 'operator_test') ->> 'already_revoked')::boolean = true,
+  'canonical revocation is idempotent'
+);
+
+select 'P1 AUTH CANONICAL ISSUANCE: PASS' as result;
+select 'P1 AUTH DIRECT INSERT BLOCK: PASS' as result;
+select 'P1 AUTH ROTATION ATOMIC: PASS' as result;
+select 'P1 AUTH ROTATION ROLLBACK: PASS' as result;
+select 'P1 AUTH REVOCATION: PASS' as result;

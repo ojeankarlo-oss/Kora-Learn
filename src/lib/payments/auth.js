@@ -23,6 +23,7 @@ function activeAt(record, now) {
     status: record.status,
     revokedAt: record.revoked_at ?? record.revokedAt,
     expiresAt: record.expires_at ?? record.expiresAt,
+    credentialProvenance: record.credential_provenance ?? record.credentialProvenance,
   }, now);
 }
 
@@ -51,7 +52,9 @@ export async function authenticatePaymentCredential({ credential, request, repos
       tenantId: record.tenant_id,
       requestId,
       success: false,
-      reason: record.revoked_at ? "revoked" : "expired_or_inactive",
+      reason: record.credential_provenance !== "server_csprng_v1"
+        ? "unverified_provenance"
+        : record.revoked_at ? "revoked" : "expired_or_inactive",
     });
     return fail("invalid_credential", 401, requestId, "inactive");
   }
@@ -77,7 +80,7 @@ export async function authenticatePaymentCredential({ credential, request, repos
       success: false,
       reason: "application_inactive",
     });
-    return fail("application_inactive", 403, requestId, "application_inactive");
+    return fail("invalid_credential", 401, requestId, "inactive");
   }
   const tenant = await repository.findTenant(record.tenant_id);
   if (!tenant || tenant.ativo !== true) {
@@ -89,7 +92,7 @@ export async function authenticatePaymentCredential({ credential, request, repos
       success: false,
       reason: "tenant_inactive",
     });
-    return fail("tenant_inactive", 403, requestId, "tenant_inactive");
+    return fail("invalid_credential", 401, requestId, "inactive");
   }
 
   const scopes = scopesFromRows(await repository.listCredentialScopes(record.id, record.tenant_id));
