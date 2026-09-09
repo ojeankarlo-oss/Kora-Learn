@@ -36,8 +36,8 @@ Deno.serve(async (request) => {
     const invoiceId = String(payment.externalReference);
     const { data: invoice } = await admin.from("invoices").select("id, tenant_id").eq("id", invoiceId).maybeSingle();
     if (!invoice) return json({ error: "Invoice nao encontrada" }, 422);
-    const { data: intent } = await admin.from("payment_intents").select("id, provider_account_id").eq("invoice_id", invoice.id).eq("provider", "asaas").maybeSingle();
-    if (!intent?.provider_account_id) return json({ error: "Payment intent nao encontrada" }, 422);
+    const { data: intent, error: intentError } = await admin.from("payment_intents").select("id, provider_account_id").eq("tenant_id", invoice.tenant_id).eq("invoice_id", invoice.id).eq("provider", "asaas").eq("is_canonical", true).maybeSingle();
+    if (intentError || !intent?.provider_account_id) return json({ error: "Payment intent nao encontrada" }, 422);
     const { data, error } = await admin.rpc("process_asaas_webhook_atomic", {
       p_provider: "asaas", p_provider_account_id: intent.provider_account_id, p_payment_intent_id: intent.id,
       p_invoice_id: invoice.id, p_provider_payment_id: String(payment.id), p_event_type: String(payload.event),

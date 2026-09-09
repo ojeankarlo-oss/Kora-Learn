@@ -24,7 +24,7 @@ test("webhook duplicado tem um único efeito e tenant incorreto não encontra in
   const invoice = { id: "invoice-1", tenantId: "tenant-a", amountCents: 1000, status: "open" };
   const repository = {
     getInvoiceForTenant: async (id, tenantId) => id === invoice.id && tenantId === invoice.tenantId ? invoice : null,
-    createPaymentIntent: async () => ({ id: "intent-1" }),
+    getOrCreatePaymentIntent: async () => ({ id: "intent-1" }),
     createPaymentAttempt: async () => ({ id: "attempt-1" }),
     attachProviderPayment: async (_, value) => value,
     transaction: async (callback) => callback({
@@ -41,7 +41,7 @@ test("webhook duplicado tem um único efeito e tenant incorreto não encontra in
   await billing.processWebhook(input);
   assert.deepEqual(await billing.processWebhook(input), { duplicate: true });
   assert.equal(calls.paid, 2);
-  await assert.rejects(() => billing.createPixPayment({ tenantId: "tenant-b", invoiceId: "invoice-1", providerCustomerId: "cus" }), /Invoice nao encontrada/);
+  await assert.rejects(() => billing.createPixPayment({ tenantId: "tenant-b", invoiceId: "invoice-1", providerCustomerId: "cus", idempotencyKey: "request-1" }), /Invoice nao encontrada/);
 });
 
 test("valor divergente não confirma pagamento", async () => {
@@ -141,15 +141,28 @@ test("migration contém RPC, RLS, constraints de estado e nenhuma operação des
 
 test("criação de Pix persiste payment attempt com o ID externo", async () => {
   const attempts = [];
+  const intents = [];
   const provider = createAsaasProvider({ apiKey: "key", webhookSecret: "secret", fetchImpl: async (url) => response(url.endsWith("pixQrCode") ? { payload: "pix" } : { id: "pay-1", status: "PENDING" }) });
   const billing = createBillingOrchestrator({ provider, repository: {
     getInvoiceForTenant: async () => ({ id: "invoice-1", tenantId: "tenant-a", amountCents: 1, status: "open" }),
-    createPaymentIntent: async () => ({ id: "intent-1" }),
+    getOrCreatePaymentIntent: async (intent) => { intents.push(intent); return { id: "intent-1" }; },
     createPaymentAttempt: async (attempt) => { attempts.push(attempt); return attempt; },
     attachProviderPayment: async (_, value) => value,
   } });
-  await billing.createPixPayment({ tenantId: "tenant-a", invoiceId: "invoice-1", providerCustomerId: "cus" });
+  await billing.createPixPayment({ tenantId: "tenant-a", invoiceId: "invoice-1", providerCustomerId: "cus", idempotencyKey: "request-1" });
+  assert.deepEqual(intents[0], { tenantId: "tenant-a", invoiceId: "invoice-1", provider: "asaas", status: "created", idempotencyKey: "request-1" });
   assert.deepEqual(attempts[0], { paymentIntentId: "intent-1", tenantId: "tenant-a", provider: "asaas", providerPaymentId: "pay-1", status: "pending" });
+});
+
+test("Pix creation requires a persistent idempotency identity", async () => {
+  const provider = createAsaasProvider({ apiKey: "key", webhookSecret: "secret" });
+  const billing = createBillingOrchestrator({ provider, repository: {
+    getInvoiceForTenant: async () => ({ id: "invoice-1", tenantId: "tenant-a", amountCents: 100, status: "open" }),
+  } });
+  await assert.rejects(
+    () => billing.createPixPayment({ tenantId: "tenant-a", invoiceId: "invoice-1", providerCustomerId: "cus" }),
+    /Chave de idempotencia obrigatoria/,
+  );
 });
 
 test("valores monetários são convertidos por centavos exatos", async () => {

@@ -175,9 +175,9 @@ select pg_temp.assert_true((select count(*)=2 from webhook_events where provider
 -- Correlation conflicts reject and leave no event, payment, or settlement residue.
 insert into invoices(id,billing_account_id,tenant_id,customer_id,amount_cents,description,status)
 values ('aa300000-0000-0000-0000-000000000023','aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa100000-0000-0000-0000-000000000001',10000,'Progression conflict','open');
-insert into payment_intents(id,billing_account_id,tenant_id,invoice_id,provider_account_id,provider,amount_cents,status,idempotency_key) values
-  ('aa400000-0000-0000-0000-000000000023','aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000023','aa200000-0000-0000-0000-000000000001','asaas',10000,'pending','progression-invoice-conflict'),
-  ('aa400000-0000-0000-0000-000000000024','aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000001','aa200000-0000-0000-0000-000000000001','asaas',10000,'pending','progression-intent-conflict');
+insert into payment_intents(id,billing_account_id,tenant_id,invoice_id,provider_account_id,provider,amount_cents,status,idempotency_key,is_canonical) values
+  ('aa400000-0000-0000-0000-000000000023','aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000023','aa200000-0000-0000-0000-000000000001','asaas',10000,'pending','progression-invoice-conflict',true),
+  ('aa400000-0000-0000-0000-000000000024','aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000001','aa200000-0000-0000-0000-000000000001','asaas',10000,'failed','progression-intent-conflict',false);
 insert into payment_attempts(payment_intent_id,tenant_id,provider,provider_payment_id,status) values
   ('aa400000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','asaas','pay-other','pending'),
   ('aa400000-0000-0000-0000-000000000023','aaaaaaaa-0000-0000-0000-000000000001','asaas','pay-atomic','pending'),
@@ -192,6 +192,37 @@ select pg_temp.assert_true((select count(*)=2 from webhook_events where provider
 select pg_temp.assert_true(not exists(select 1 from webhook_events where provider_payment_id='pay-other'),'external ID conflict left a webhook event');
 select pg_temp.assert_true((select status='open' from invoices where id='aa300000-0000-0000-0000-000000000023'),'invoice conflict left a partial settlement');
 select pg_temp.assert_true((select status='open' from invoices where id='bb300000-0000-0000-0000-000000000002'),'cross-tenant conflict left a partial settlement');
+
+-- Intent creation is tenant-scoped, idempotent, canonical, and history-preserving.
+insert into invoices(id,billing_account_id,tenant_id,customer_id,amount_cents,description,status) values
+  ('aa300000-0000-0000-0000-000000000030','aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa100000-0000-0000-0000-000000000001',3000,'Concurrent intent','open'),
+  ('aa300000-0000-0000-0000-000000000031','aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa100000-0000-0000-0000-000000000001',3100,'Retry intent','open'),
+  ('aa300000-0000-0000-0000-000000000032','aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa100000-0000-0000-0000-000000000001',3200,'Different invoice','open'),
+  ('aa300000-0000-0000-0000-000000000033','aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa100000-0000-0000-0000-000000000001',3300,'Intent history','open'),
+  ('bb300000-0000-0000-0000-000000000031','bb000000-0000-0000-0000-000000000002','bbbbbbbb-0000-0000-0000-000000000002','bb100000-0000-0000-0000-000000000002',3100,'Tenant B retry intent','open');
+
+select get_or_create_payment_intent_atomic('aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000031','aa200000-0000-0000-0000-000000000001','asaas',3100,'shared-request');
+select pg_temp.assert_true((
+  select id = (get_or_create_payment_intent_atomic('aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000031','aa200000-0000-0000-0000-000000000001','asaas',3100,'shared-request')).id
+  from payment_intents where tenant_id='aaaaaaaa-0000-0000-0000-000000000001' and idempotency_key='shared-request'
+),'same intent request did not reuse its row');
+select pg_temp.assert_true((select count(*)=1 from payment_intents where tenant_id='aaaaaaaa-0000-0000-0000-000000000001' and invoice_id='aa300000-0000-0000-0000-000000000031' and provider='asaas' and is_canonical),'retry created ambiguous canonical intents');
+
+select get_or_create_payment_intent_atomic('bb000000-0000-0000-0000-000000000002','bbbbbbbb-0000-0000-0000-000000000002','bb300000-0000-0000-0000-000000000031','bb200000-0000-0000-0000-000000000002','asaas',3100,'shared-request');
+select pg_temp.assert_true((select count(*)=2 from payment_intents where provider='asaas' and idempotency_key='shared-request'),'tenant-scoped idempotency keys interfered');
+select get_or_create_payment_intent_atomic('aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000032','aa200000-0000-0000-0000-000000000001','asaas',3200,'different-invoice-request');
+select get_or_create_payment_intent_atomic('aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000031',null,'other',3100,'other-provider-request');
+select pg_temp.assert_true((select count(*)=2 from payment_intents where tenant_id='aaaaaaaa-0000-0000-0000-000000000001' and invoice_id='aa300000-0000-0000-0000-000000000031' and is_canonical),'provider-specific canonical intents were not independent');
+
+select get_or_create_payment_intent_atomic('aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000033','aa200000-0000-0000-0000-000000000001','asaas',3300,'history-1');
+update payment_intents set status='failed' where tenant_id='aaaaaaaa-0000-0000-0000-000000000001' and idempotency_key='history-1';
+select get_or_create_payment_intent_atomic('aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000033','aa200000-0000-0000-0000-000000000001','asaas',3300,'history-2');
+select pg_temp.assert_true((select count(*)=2 from payment_intents where invoice_id='aa300000-0000-0000-0000-000000000033' and provider='asaas'),'terminal intent history was not preserved');
+select pg_temp.assert_true((select count(*)=1 from payment_intents where invoice_id='aa300000-0000-0000-0000-000000000033' and provider='asaas' and is_canonical and status='created'),'terminal intent replacement is ambiguous');
+select pg_temp.assert_rejected($sql$insert into payment_intents(billing_account_id,tenant_id,invoice_id,provider_account_id,provider,amount_cents,status,idempotency_key,is_canonical) values ('aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000033','aa200000-0000-0000-0000-000000000001','asaas',3300,'pending','hidden-active',false)$sql$,'active noncanonical intent bypassed webhook resolution');
+select pg_temp.assert_rejected($sql$select get_or_create_payment_intent_atomic('aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000033','aa200000-0000-0000-0000-000000000001','asaas',3300,'history-conflict')$sql$,'active canonical intent accepted a different operation key');
+select pg_temp.assert_true((select count(*)=2 from payment_intents where invoice_id='aa300000-0000-0000-0000-000000000033'),'idempotency conflict left a partial intent');
+select pg_temp.assert_true((select count(*)=1 from payment_intents where tenant_id='aaaaaaaa-0000-0000-0000-000000000001' and invoice_id='aa300000-0000-0000-0000-000000000001' and provider='asaas' and is_canonical),'webhook intent resolution is not unique');
 
 -- Forbidden state transitions executed directly in PostgreSQL.
 update payments set status='refunded' where invoice_id='aa300000-0000-0000-0000-000000000001';
@@ -210,3 +241,4 @@ select 'ROLLBACK REAL: PASS' as result;
 select 'STATE MACHINE REAL: PASS' as result;
 select 'EXTERNAL CORRELATION REAL: PASS' as result;
 select 'SUCCESSIVE WEBHOOK EVENTS REAL: PASS' as result;
+select 'PAYMENT INTENT IDEMPOTENCY REAL: PASS' as result;
