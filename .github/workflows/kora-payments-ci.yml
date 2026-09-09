@@ -1,0 +1,131 @@
+name: KORA Payments CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  payments-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: supabase/postgres:15.14.1.167
+        env:
+          POSTGRES_DB: kora_ci
+          POSTGRES_USER: supabase_admin
+          POSTGRES_PASSWORD: local_ci_fixture_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d kora_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGDATABASE: kora_ci
+      PGUSER: postgres
+      PGPASSWORD: local_ci_fixture_only
+      DATABASE_URL: postgresql://postgres:local_ci_fixture_only@localhost:5432/kora_ci
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Check committed changes for whitespace errors
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            base="$PR_BASE_SHA"
+          elif [[ "$EVENT_NAME" == "push" && ! "$PUSH_BEFORE_SHA" =~ ^0+$ ]]; then
+            base="$PUSH_BEFORE_SHA"
+          else
+            base="HEAD^"
+          fi
+          git diff --check "$base" HEAD
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install --yes postgresql-client
+
+      - name: Bootstrap disposable Supabase compatibility schemas
+        run: psql -v ON_ERROR_STOP=1 -f tests/payments/sql/bootstrap.sql
+
+      - name: Validate and replay canonical migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          mapfile -t migrations < <(find supabase/migrations -maxdepth 1 -type f -print | sort)
+          if [[ ${#migrations[@]} -eq 0 ]]; then
+            echo "MIGRATION REPLAY: FAIL (no migrations found)"
+            exit 1
+          fi
+
+          declare -A seen_prefixes=()
+          for migration in "${migrations[@]}"; do
+            name=$(basename "$migration")
+            if [[ ! "$name" =~ ^([0-9]{3})_[a-z0-9][a-z0-9_]*\.sql$ ]]; then
+              echo "MIGRATION REPLAY: FAIL (invalid canonical name: $name)"
+              exit 1
+            fi
+            prefix=${BASH_REMATCH[1]}
+            if [[ -n "${seen_prefixes[$prefix]:-}" ]]; then
+              echo "MIGRATION REPLAY: FAIL (duplicate prefix $prefix: ${seen_prefixes[$prefix]} and $name)"
+              exit 1
+            fi
+            seen_prefixes[$prefix]=$name
+          done
+
+          for migration in "${migrations[@]}"; do
+            echo "Applying $migration"
+            if ! psql -v ON_ERROR_STOP=1 -f "$migration"; then
+              echo "MIGRATION REPLAY: FAIL ($migration)"
+              exit 1
+            fi
+          done
+          echo "MIGRATION REPLAY: PASS (${#migrations[@]} migrations)"
+
+      - name: Run real PostgreSQL payment invariants
+        run: psql -v ON_ERROR_STOP=1 -f tests/payments/sql/p0_payments_qa.sql
+
+      - name: Run webhook concurrency with two connections
+        shell: bash
+        run: bash tests/payments/sql/concurrency.sh
+
+      - name: Run concurrent payment intent creation
+        shell: bash
+        run: bash tests/payments/sql/intent-concurrency.sh
+
+      - name: Run Node payment tests
+        run: npm ci && npm run test:payments
+
+      - name: Deno check Payments Edge Functions
+        run: |
+          deno check supabase/functions/asaas-webhook/index.ts
+          deno check supabase/functions/pix-create/index.ts
+          deno check supabase/functions/pix-webhook/index.ts
