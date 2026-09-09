@@ -107,11 +107,11 @@ begin
     raise exception 'unknown payment API scope';
   end if;
 
-  v_public_id := encode(gen_random_bytes(8), 'hex');
-  v_secret_suffix := translate(encode(gen_random_bytes(32), 'base64'), E'+/=', '-_');
+  v_public_id := encode(extensions.gen_random_bytes(8), 'hex');
+  v_secret_suffix := translate(encode(extensions.gen_random_bytes(32), 'base64'), E'+/=', '-_');
   v_raw_secret := format('kp_%s_%s_%s', app.environment, v_public_id, v_secret_suffix);
   v_public_prefix := format('kp_%s_%s', app.environment, v_public_id);
-  v_credential_hash := encode(digest(v_raw_secret, 'sha256'), 'hex');
+  v_credential_hash := encode(extensions.digest(v_raw_secret, 'sha256'), 'hex');
 
   insert into public.payment_api_credentials(
     application_id, tenant_id, public_prefix, credential_hash,

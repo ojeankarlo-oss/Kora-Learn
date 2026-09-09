@@ -223,7 +223,7 @@ test("causas de inatividade não são enumeradas na resposta externa", async () 
 test("migration 033 fecha a provenance no banco e gera o secret dentro da RPC", () => {
   const migration = readFileSync(new URL("../../supabase/migrations/033_kora_p1_pay_api_credential_hardening.sql", import.meta.url), "utf8");
   assert.match(migration, /gen_random_bytes\(32\)/);
-  assert.match(migration, /digest\(v_raw_secret, 'sha256'\)/);
+  assert.match(migration, /extensions\.digest\(v_raw_secret, 'sha256'\)/);
   assert.match(migration, /credential_provenance.*server_csprng_v1/s);
   assert.doesNotMatch(migration, /p_secret/);
   assert.match(migration, /revoke all on function public\.create_payment_api_credential/s);

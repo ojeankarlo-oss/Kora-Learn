@@ -170,7 +170,7 @@ select (:'canonical_payload'::jsonb ->> 'credential_id')::uuid as credential_id,
 
 select pg_temp.assert_true(
   (select credential_provenance = 'server_csprng_v1'
-     and credential_hash = encode(digest(:'canonical_secret', 'sha256'), 'hex')
+     and credential_hash = encode(extensions.digest(:'canonical_secret', 'sha256'), 'hex')
      and credential_hash <> :'canonical_secret'
    from payment_api_credentials
    where id = (:'canonical_credential_id')::uuid),
@@ -208,7 +208,7 @@ select pg_temp.assert_true(
 select pg_temp.assert_true(
   (select status = 'active' and credential_provenance = 'server_csprng_v1'
      and rotated_from_id = (:'canonical_credential_id')::uuid
-     and credential_hash = encode(digest(:'rotation_secret', 'sha256'), 'hex')
+     and credential_hash = encode(extensions.digest(:'rotation_secret', 'sha256'), 'hex')
    from payment_api_credentials
    where id = (:'rotation_credential_id')::uuid),
   'rotation creates a new canonical credential with matching hash'
