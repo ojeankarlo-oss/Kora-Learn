@@ -22,3 +22,19 @@ The orchestrator handles outbound payment creation only and requires tenant-scop
 ## Current scope
 
 Implemented locally: invoice/payment-intent orchestration, Asaas sandbox Pix charge and QR payload, secure webhook handler, idempotency, amount and tenant checks, and deterministic tests. Boleto, card, subscriptions, reconciliation, and fiscal issuance are explicit extension points and currently fail closed rather than pretending to be supported.
+
+## P1-PAY-API-003 — HTTP foundation `/v1`
+
+A fundação HTTP versionada de Payments usa **Supabase Edge Functions com runtime Deno**, em vez de introduzir um servidor Node/Fastify/Express separado. Essa decisão reutiliza o runtime já operacional do repositório, mantém o baixo custo operacional do deployment existente e permite que a autenticação M2M criada no P1-PAY-API-002 seja aplicada antes de qualquer futuro handler financeiro.
+
+A entrada pública é a Edge Function `payments-api-v1`, com a fronteira lógica `/v1`. A função usa `verify_jwt = false` somente porque o pipeline próprio valida a credential M2M; o tenant nunca vem do caller. O caminho de autoridade é `credential → application → tenant → scopes`.
+
+O pipeline comum é: request HTTP, geração/sanitização de `request_id`, validação de request, autenticação M2M, contexto de tenant, scope enforcement, handler, resposta padronizada e observabilidade. Nesta fase, somente `GET /v1` e `GET /v1/health` existem; não há invoices, payment intents, payments, refunds, checkout, Pix, boleto, cartão, provider novo, outbound webhook ou integração ENEM.
+
+O contrato versionado está em `docs/openapi/kora-payments-v1.yaml`. Valores monetários futuros usarão minor units inteiras, `Idempotency-Key` será obrigatória para mutações financeiras futuras, e o rate limiting será identificado por tenant/application/credential/rota. A implementação atual fornece uma abstração in-memory somente para testes; enforcement distribuído e operacionalização de produção ficam para uma fase posterior.
+
+O fluxo de produto permanece:
+
+`Consumer → KORA Payments API /v1 → M2M Auth → Tenant Context → Billing Core → Provider Adapter`.
+
+Produtos consumidores nunca chamam Asaas diretamente. A API `/v1` deverá evoluir para `/v2` por meio de novos módulos de versão, sem espalhar condicionais de versão pelos handlers existentes.

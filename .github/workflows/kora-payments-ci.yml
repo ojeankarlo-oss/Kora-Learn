@@ -130,8 +130,12 @@ jobs:
       - name: Run Node Payments API auth tests
         run: npm run test:payments:auth
 
+      - name: Run Payments API foundation and contract tests
+        run: npm run test:payments:contract
+
       - name: Deno check Payments Edge Functions
         run: |
           deno check supabase/functions/asaas-webhook/index.ts
           deno check supabase/functions/pix-create/index.ts
           deno check supabase/functions/pix-webhook/index.ts
+          deno check supabase/functions/payments-api-v1/index.ts

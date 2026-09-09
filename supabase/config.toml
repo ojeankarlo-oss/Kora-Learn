@@ -3,3 +3,6 @@ verify_jwt = false
 
 [functions.asaas-webhook]
 verify_jwt = false
+
+[functions.payments-api-v1]
+verify_jwt = false

@@ -1,0 +1,188 @@
+openapi: 3.1.0
+info:
+  title: KORA Payments API
+  version: 1.0.0
+  description: >-
+    Versioned HTTP foundation for KORA Payments. This contract intentionally
+    exposes no financial mutation endpoint in this phase.
+servers:
+  - url: https://{supabaseProject}.supabase.co/functions/v1/payments-api-v1
+    variables:
+      supabaseProject:
+        default: project-ref
+        description: Supabase project reference used by the deployed Edge Function.
+tags:
+  - name: Foundation
+    description: Non-financial API foundation endpoints.
+paths:
+  /v1:
+    get:
+      tags: [Foundation]
+      operationId: getPaymentsApiMetadata
+      summary: Return API metadata
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: API metadata
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetadataResponse'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/health:
+    get:
+      tags: [Foundation]
+      operationId: getPaymentsApiHealth
+      summary: Return minimal public health status
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Minimal health response
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+components:
+  securitySchemes:
+    M2MBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: KORA-Payments-Credential
+      description: >-
+        M2M credential issued server-side by the canonical payment API
+        credential RPC. The tenant is derived from credential → application →
+        tenant; caller-supplied tenant authority is never accepted.
+  parameters:
+    RequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      description: Optional safe correlation ID. Invalid values are replaced server-side.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: '^[A-Za-z0-9._:-]{1,128}$'
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Required for future financial mutations; not used by foundation GET endpoints.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+  headers:
+    XRequestId:
+      description: Server-generated or safely accepted request correlation ID.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+  schemas:
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message, request_id, details]
+      properties:
+        code:
+          type: string
+          enum: [invalid_request, invalid_credential, insufficient_scope, resource_not_found, conflict, semantic_error, rate_limited, internal_error, provider_unavailable]
+        message:
+          type: string
+        request_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        details:
+          type: array
+          items: {}
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/Error'
+    Money:
+      type: object
+      additionalProperties: false
+      required: [amount, currency]
+      properties:
+        amount:
+          type: integer
+          minimum: 0
+          description: Integer minor units. Floating point values are forbidden.
+        currency:
+          $ref: '#/components/schemas/Currency'
+    Currency:
+      type: string
+      enum: [BRL, USD, EUR]
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required: [data, request_id]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [ok, version]
+          properties:
+            ok:
+              type: boolean
+            version:
+              type: string
+              const: v1
+        request_id:
+          type: string
+    MetadataResponse:
+      type: object
+      additionalProperties: false
+      required: [data, request_id]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [name, version, status]
+          properties:
+            name:
+              type: string
+            version:
+              type: string
+              const: v1
+            status:
+              type: string
+              const: foundation
+        request_id:
+          type: string
+  responses:
+    MethodNotAllowed:
+      description: Method not supported for this route.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InternalError:
+      description: Internal error without implementation details.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
