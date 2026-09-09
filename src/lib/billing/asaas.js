@@ -1,4 +1,4 @@
-import { PaymentCapability, centsToReais, decimalReaisToCents } from "./provider.js";
+import { PaymentCapability, centsToReais } from "./provider.js";
 
 const BASE_URLS = Object.freeze({
   sandbox: "https://sandbox.asaas.com/api/v3",
@@ -15,7 +15,7 @@ async function responseJson(response) {
   try { return text ? JSON.parse(text) : {}; } catch { return { raw: text }; }
 }
 
-export function createAsaasProvider({ apiKey, environment = "sandbox", webhookSecret, fetchImpl = fetch } = {}) {
+export function createAsaasProvider({ apiKey, environment = "sandbox", fetchImpl = fetch } = {}) {
   const key = required(apiKey, "ASAAS_API_KEY");
   const mode = String(environment).toLowerCase() === "production" ? "production" : "sandbox";
   const baseUrl = BASE_URLS[mode];
@@ -62,21 +62,5 @@ export function createAsaasProvider({ apiKey, environment = "sandbox", webhookSe
     async getPayment(input) { return request(`/payments/${required(input.providerPaymentId, "providerPaymentId")}`); },
     async getCharge(input) { return this.getPayment(input); },
     async reconcile() { return { provider: "asaas", status: "not_implemented" }; },
-    validateWebhook(headers) {
-      const received = headers?.get?.("asaas-access-token") || headers?.["asaas-access-token"];
-      return Boolean(webhookSecret && received && received === webhookSecret);
-    },
-    async processWebhook(payload) {
-      const payment = payload?.payment;
-      if (!payload?.event || !payment?.id || !payment?.externalReference) throw new Error("Webhook Asaas invalido");
-      return {
-        eventType: payload.event,
-        providerPaymentId: payment.id,
-        invoiceId: payment.externalReference,
-        amountCents: decimalReaisToCents(payment.value),
-        currency: payment.currency || "BRL",
-        status: ["PAYMENT_RECEIVED", "PAYMENT_CONFIRMED"].includes(payload.event) ? "confirmed" : "pending",
-      };
-    },
   };
 }

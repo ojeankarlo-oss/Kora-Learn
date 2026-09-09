@@ -22,7 +22,6 @@ export function assertProviderContract(provider) {
   const methods = [
     "createPixCharge", "createBoleto", "createCardPayment", "createSubscription",
     "cancelSubscription", "refundPayment", "getPayment", "getCharge", "reconcile",
-    "validateWebhook", "processWebhook",
   ];
   for (const method of methods) {
     if (typeof provider?.[method] !== "function") throw new Error(`Provider incompleto: ${method}`);

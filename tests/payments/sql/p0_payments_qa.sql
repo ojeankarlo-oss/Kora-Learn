@@ -150,6 +150,13 @@ begin
   end loop;
 end $$;
 
+select pg_temp.assert_rejected($sql$
+  select process_asaas_webhook_atomic('asaas','aa200000-0000-0000-0000-000000000001','aa400000-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000001','pay-atomic','PAYMENT_OVERDUE',10000,'BRL','{}')
+$sql$,'unsupported Asaas event was accepted');
+select pg_temp.assert_true(not exists(select 1 from webhook_events where provider_event_id='pay-atomic:PAYMENT_OVERDUE'),'unsupported event left an audit row');
+select pg_temp.assert_true((select status='open' from invoices where id='aa300000-0000-0000-0000-000000000001'),'unsupported event settled invoice');
+select pg_temp.assert_true(not exists(select 1 from payments where invoice_id='aa300000-0000-0000-0000-000000000001'),'unsupported event created payment');
+
 select process_asaas_webhook_atomic('asaas','aa200000-0000-0000-0000-000000000001','aa400000-0000-0000-0000-000000000001','aa300000-0000-0000-0000-000000000001','pay-atomic','PAYMENT_RECEIVED',10000,'BRL','{}');
 select pg_temp.assert_true((select status='paid' from invoices where id='aa300000-0000-0000-0000-000000000001'),'atomic RPC settled invoice');
 select pg_temp.assert_true((select count(*)=1 from payments where invoice_id='aa300000-0000-0000-0000-000000000001'),'atomic RPC created exactly one payment');

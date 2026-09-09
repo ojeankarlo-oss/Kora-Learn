@@ -13,7 +13,7 @@ These directions share provider-neutral primitives but never share tenant debt o
 
 `src/lib/billing/provider.js` defines the provider contract and capabilities. `src/lib/billing/asaas.js` is the first adapter and defaults to sandbox. Credentials are supplied at runtime through `ASAAS_API_KEY` and `ASAAS_WEBHOOK_SECRET`; they are never persisted in the database or logged. Inter can be added later as `InterProvider` without changing Billing Core.
 
-The orchestrator requires the repository to enforce database transactions and tenant-scoped reads. Webhooks are accepted only when authenticated, correlated to a KORA invoice through `externalReference`, and matched by exact amount. A unique provider event and provider payment ID provide idempotency at the database boundary.
+The orchestrator handles outbound payment creation only and requires tenant-scoped repository reads plus atomic payment-intent creation. Asaas webhooks have one authorized settlement path: the `asaas-webhook` Edge Function delegates to `process_asaas_webhook_atomic(...)`. The RPC authenticates correlation to a KORA invoice through `externalReference`, enforces exact amount and supported event types, and provides idempotency through unique provider event and payment identifiers.
 
 ## Migration
 
