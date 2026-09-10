@@ -1,3 +1,5 @@
+import { getNumericLexeme, getRootNumericLexeme } from "./json-duplicate.js";
+
 const encoder = new TextEncoder();
 
 function canonicalValue(value) {
@@ -6,21 +8,27 @@ function canonicalValue(value) {
   if (typeof value === "boolean") return value ? "true" : "false";
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new TypeError("Fingerprint value must be finite");
+    if (!Number.isSafeInteger(value)) {
+      throw new TypeError("Fingerprint numeric precision requires lossless JSON parsing");
+    }
     return JSON.stringify(value);
   }
   if (typeof value === "bigint" || typeof value === "function" || typeof value === "symbol" || value === undefined) {
     throw new TypeError("Fingerprint value is not JSON-compatible");
   }
-  if (Array.isArray(value)) return `[${value.map(canonicalValue).join(",")}]`;
+  if (Array.isArray(value)) {
+    return `[${value.map((item, index) => getNumericLexeme(value, index) ?? canonicalValue(item)).join(",")}]`;
+  }
   if (typeof value === "object") {
     const keys = Object.keys(value).sort();
-    return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalValue(value[key])}`).join(",")}}`;
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${getNumericLexeme(value, key) ?? canonicalValue(value[key])}`).join(",")}}`;
   }
   throw new TypeError("Fingerprint value is not JSON-compatible");
 }
 
 export function canonicalizeJson(value) {
-  return canonicalValue(value);
+  const rootNumericLexeme = getRootNumericLexeme(value);
+  return rootNumericLexeme ?? canonicalValue(value);
 }
 
 export async function sha256Hex(value) {
@@ -40,4 +48,5 @@ export async function fingerprintHttpRequest({ method, operation, body }) {
   });
 }
 
-export const FINGERPRINT_ALGORITHM = "SHA-256 over deterministic sorted-key JSON";
+export const FINGERPRINT_ALGORITHM =
+  "SHA-256 over deterministic sorted-key JSON with exact decimal numeric lexemes";

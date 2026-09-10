@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { canonicalizeJson, fingerprintHttpRequest, fingerprintJson, FINGERPRINT_ALGORITHM } from "../../src/lib/payments/fingerprint.js";
+import { parseJsonRejectDuplicateKeys } from "../../src/lib/payments/json-duplicate.js";
 import {
   buildIdempotencyScope,
   classifyIdempotencyFailure,
@@ -61,4 +62,53 @@ test("policy distinguishes deterministic and transient failure recovery", () => 
   assert.equal(classifyIdempotencyFailure({ transient: true }), "transient");
   assert.equal(idempotencyPolicy().staleProcessing.includes("expired lease"), true);
   assert.equal(IDEMPOTENCY_RESPONSE_MAX_BYTES, 262144);
+});
+
+
+test("lossless numeric fingerprints distinguish adjacent large integers", async () => {
+  const first = parseJsonRejectDuplicateKeys('{"n":9007199254740992}');
+  const second = parseJsonRejectDuplicateKeys('{"n":9007199254740993}');
+  assert.notEqual(canonicalizeJson(first), canonicalizeJson(second));
+  assert.notEqual(await fingerprintJson(first), await fingerprintJson(second));
+});
+
+test("lossless numeric fingerprints distinguish precision decimals", async () => {
+  const first = parseJsonRejectDuplicateKeys('{"n":1}');
+  const second = parseJsonRejectDuplicateKeys('{"n":1.0000000000000001}');
+  const third = parseJsonRejectDuplicateKeys('{"n":0.10000000000000000}');
+  const fourth = parseJsonRejectDuplicateKeys('{"n":0.10000000000000001}');
+  assert.notEqual(await fingerprintJson(first), await fingerprintJson(second));
+  assert.notEqual(await fingerprintJson(third), await fingerprintJson(fourth));
+});
+
+test("numeric equivalence canonicalizes decimal and exponent spellings", async () => {
+  const equivalent = ["1", "1.0", "1e0", "10e-1"].map((value) => parseJsonRejectDuplicateKeys(`{"n":${value}}`));
+  const fingerprints = await Promise.all(equivalent.map((value) => fingerprintJson(value)));
+  assert.equal(new Set(fingerprints).size, 1);
+
+  const exponentEquivalent = ["1e20", "10e19", "100000000000000000000"].map((value) => parseJsonRejectDuplicateKeys(`{"n":${value}}`));
+  const exponentFingerprints = await Promise.all(exponentEquivalent.map((value) => fingerprintJson(value)));
+  assert.equal(new Set(exponentFingerprints).size, 1);
+});
+
+test("negative zero has one documented canonical representation", async () => {
+  const values = ["0", "-0", "0.0", "-0.0"].map((value) => parseJsonRejectDuplicateKeys(`{"n":${value}}`));
+  const canonical = values.map((value) => canonicalizeJson(value));
+  assert.equal(new Set(canonical).size, 1);
+  const fingerprints = await Promise.all(values.map((value) => fingerprintJson(value)));
+  assert.equal(new Set(fingerprints).size, 1);
+});
+
+test("same idempotency authority and key conflict on distinct lossless numeric payload", async () => {
+  const authorityAndKey = { ...authority, method: "POST", operation: "POST /v1/future", key: "idem-exact-number" };
+  const first = parseJsonRejectDuplicateKeys('{"amount":9007199254740992}');
+  const second = parseJsonRejectDuplicateKeys('{"amount":9007199254740993}');
+  const firstFingerprint = await fingerprintHttpRequest({ ...authorityAndKey, body: first });
+  const secondFingerprint = await fingerprintHttpRequest({ ...authorityAndKey, body: second });
+  assert.notEqual(firstFingerprint, secondFingerprint);
+});
+
+
+test("fingerprint fails closed for unparsed fractional JavaScript numbers", () => {
+  assert.throws(() => canonicalizeJson({ n: 0.1 }), /lossless JSON parsing/);
 });

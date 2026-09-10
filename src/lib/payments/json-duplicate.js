@@ -1,3 +1,5 @@
+import { canonicalizeNumericLexeme } from "./numeric.js";
+
 export class DuplicateJsonKeyError extends SyntaxError {
   constructor() {
     super("Duplicate JSON object key");
@@ -16,9 +18,19 @@ export class InvalidJsonError extends SyntaxError {
 
 const WHITESPACE = new Set([" ", "\n", "\r", "\t"]);
 const SIMPLE_ESCAPES = new Set(["\"", "\\", "/", "b", "f", "n", "r", "t"]);
+const NUMERIC_LEXEMES = new WeakMap();
+const ROOT_NUMERIC_LEXEM = Symbol("rootNumericLexeme");
 
 function fail() {
   throw new InvalidJsonError();
+}
+
+export function getNumericLexeme(value, key) {
+  return NUMERIC_LEXEMES.get(value)?.get(key);
+}
+
+export function getRootNumericLexeme(value) {
+  return value && typeof value === "object" ? value[ROOT_NUMERIC_LEXEM] : undefined;
 }
 
 export function parseJsonRejectDuplicateKeys(source) {
@@ -66,25 +78,32 @@ export function parseJsonRejectDuplicateKeys(source) {
     const match = source.slice(index).match(/^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/);
     if (!match) fail();
     index += match[0].length;
-    const value = Number(match[0]);
+    const lexeme = match[0];
+    const value = Number(lexeme);
     if (!Number.isFinite(value)) fail();
-    return value;
+    return { value, numericMetadata: canonicalizeNumericLexeme(lexeme) };
   }
 
   function parseArray() {
     index += 1;
     skipWhitespace();
     const result = [];
+    const numericMetadata = new Map();
     if (source[index] === "]") {
       index += 1;
-      return result;
+      NUMERIC_LEXEMES.set(result, numericMetadata);
+      return { value: result };
     }
     while (true) {
-      result.push(parseValue());
+      const parsed = parseValue();
+      const arrayIndex = result.length;
+      result.push(parsed.value);
+      if (parsed.numericMetadata !== undefined) numericMetadata.set(arrayIndex, parsed.numericMetadata);
       skipWhitespace();
       if (source[index] === "]") {
         index += 1;
-        return result;
+        NUMERIC_LEXEMES.set(result, numericMetadata);
+        return { value: result };
       }
       if (source[index] !== ",") fail();
       index += 1;
@@ -97,9 +116,11 @@ export function parseJsonRejectDuplicateKeys(source) {
     skipWhitespace();
     const result = {};
     const keys = new Set();
+    const numericMetadata = new Map();
     if (source[index] === "}") {
       index += 1;
-      return result;
+      NUMERIC_LEXEMES.set(result, numericMetadata);
+      return { value: result };
     }
     while (true) {
       const key = parseString();
@@ -109,16 +130,19 @@ export function parseJsonRejectDuplicateKeys(source) {
       if (source[index] !== ":") fail();
       index += 1;
       skipWhitespace();
+      const parsed = parseValue();
       Object.defineProperty(result, key, {
-        value: parseValue(),
+        value: parsed.value,
         enumerable: true,
         configurable: true,
         writable: true,
       });
+      if (parsed.numericMetadata !== undefined) numericMetadata.set(key, parsed.numericMetadata);
       skipWhitespace();
       if (source[index] === "}") {
         index += 1;
-        return result;
+        NUMERIC_LEXEMES.set(result, numericMetadata);
+        return { value: result };
       }
       if (source[index] !== ",") fail();
       index += 1;
@@ -131,25 +155,28 @@ export function parseJsonRejectDuplicateKeys(source) {
     const character = source[index];
     if (character === "{") return parseObject();
     if (character === "[") return parseArray();
-    if (character === '"') return parseString();
+    if (character === '"') return { value: parseString() };
     if (source.startsWith("true", index)) {
       index += 4;
-      return true;
+      return { value: true };
     }
     if (source.startsWith("false", index)) {
       index += 5;
-      return false;
+      return { value: false };
     }
     if (source.startsWith("null", index)) {
       index += 4;
-      return null;
+      return { value: null };
     }
     if (character === "-" || (character >= "0" && character <= "9")) return parseNumber();
     fail();
   }
 
-  const value = parseValue();
+  const parsed = parseValue();
   skipWhitespace();
   if (index !== source.length) fail();
-  return value;
+  if (parsed.numericMetadata !== undefined && parsed.value && typeof parsed.value === "object") {
+    Object.defineProperty(parsed.value, ROOT_NUMERIC_LEXEM, { value: parsed.numericMetadata, enumerable: false });
+  }
+  return parsed.value;
 }
