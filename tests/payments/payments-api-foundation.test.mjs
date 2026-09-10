@@ -4,7 +4,7 @@ import { buildCredentialRecord } from "../../src/lib/payments/credential.js";
 import { readFileSync } from "node:fs";
 import { parse } from "yaml";
 import { validatePaymentsOpenApi } from "../../scripts/validate-payments-openapi.mjs";
-import { MONEY_SCHEMA, parseMoney } from "../../src/lib/payments/money.js";
+import { MAX_MONEY_MINOR_UNITS, MONEY_SCHEMA, parseMoney } from "../../src/lib/payments/money.js";
 import { idempotencyPolicy, validateIdempotencyHeader } from "../../src/lib/payments/idempotency.js";
 import { createMemoryRateLimiter, buildRateLimitKey, rateLimitPolicy } from "../../src/lib/payments/rate-limit.js";
 import {
@@ -248,9 +248,10 @@ test("handler failure não vaza stack, SQL, secret ou internals", async () => {
 
 test("money rejeita float e aceita minor units inteiras/currency válida", () => {
   assert.equal(parseMoney({ amount: 12990, currency: "BRL" }).ok, true);
-  assert.equal(parseMoney({ amount: Number.MAX_SAFE_INTEGER, currency: "BRL" }).ok, true);
-  assert.equal(parseMoney({ amount: Number.MAX_SAFE_INTEGER + 1, currency: "BRL" }).ok, false);
-  assert.equal(MONEY_SCHEMA.properties.amount.maximum, Number.MAX_SAFE_INTEGER);
+  assert.equal(parseMoney({ amount: 0, currency: "BRL" }).ok, false);
+  assert.equal(parseMoney({ amount: MAX_MONEY_MINOR_UNITS, currency: "BRL" }).ok, true);
+  assert.equal(parseMoney({ amount: MAX_MONEY_MINOR_UNITS + 1, currency: "BRL" }).ok, false);
+  assert.equal(MONEY_SCHEMA.properties.amount.maximum, MAX_MONEY_MINOR_UNITS);
   assert.equal(parseMoney({ amount: 129.9, currency: "BRL" }).ok, false);
   assert.equal(parseMoney({ amount: 12990, currency: "XYZ" }).ok, false);
 });

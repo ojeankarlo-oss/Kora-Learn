@@ -41,7 +41,8 @@ export function validatePaymentsOpenApi(spec, routes = PAYMENTS_API_ROUTES) {
   assert(spec.components?.parameters?.IdempotencyKey, "Idempotency-Key parameter missing");
   assert(spec.components?.schemas?.ErrorResponse, "ErrorResponse schema missing");
   assert(spec.components?.schemas?.Money?.properties?.amount?.type === "integer", "Money amount must be integer");
-  assert(spec.components?.schemas?.Money?.properties?.amount?.maximum === Number.MAX_SAFE_INTEGER, "Money amount maximum must equal Number.MAX_SAFE_INTEGER");
+  assert(spec.components?.schemas?.Money?.properties?.amount?.minimum === 1, "Money amount minimum must be positive");
+  assert(spec.components?.schemas?.Money?.properties?.amount?.maximum === 2147483647, "Money amount maximum must equal PostgreSQL integer ceiling");
   assert(spec.components?.schemas?.Currency?.enum?.includes("BRL"), "BRL currency missing");
 
   const specPaths = Object.keys(spec.paths || {});
