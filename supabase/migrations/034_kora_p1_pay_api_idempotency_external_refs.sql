@@ -400,12 +400,12 @@ set search_path = pg_catalog, public
 as $$
 declare
   item jsonb;
-  key text;
+  json_key text;
 begin
   if p_body is null then return false; end if;
   if jsonb_typeof(p_body) = 'object' then
-    for key, item in select key, value from jsonb_each(p_body) loop
-      if lower(key) ~ '(authorization|secret|access_token|refresh_token|client_secret|private_key|password|stack|sql|provider_payment_id|provider_account_id)' then
+    for json_key, item in select object_key, object_value from jsonb_each(p_body) as entries(object_key, object_value) loop
+      if lower(json_key) ~ '(authorization|secret|access_token|refresh_token|client_secret|private_key|password|stack|sql|provider_payment_id|provider_account_id)' then
         return false;
       end if;
       if not public.payment_api_response_is_sanitized(item) then return false; end if;
