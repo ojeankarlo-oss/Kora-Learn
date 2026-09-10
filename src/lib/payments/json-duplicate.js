@@ -109,7 +109,12 @@ export function parseJsonRejectDuplicateKeys(source) {
       if (source[index] !== ":") fail();
       index += 1;
       skipWhitespace();
-      result[key] = parseValue();
+      Object.defineProperty(result, key, {
+        value: parseValue(),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
       skipWhitespace();
       if (source[index] === "}") {
         index += 1;

@@ -6,15 +6,84 @@ begin
   if not coalesce(ok, false) then raise exception 'ASSERTION FAILED: %', message; end if;
 end $$;
 
-create or replace function pg_temp.assert_rejected(statement text, message text) returns void
+create or replace function pg_temp.assert_sql_error(statement text, expected_state text, expected_message text, assertion text) returns void
 language plpgsql as $$
+declare
+  did_raise boolean := false;
+  actual_state text;
+  actual_message text;
 begin
   begin
     execute statement;
   exception when others then
-    return;
+    did_raise := true;
+    get stacked diagnostics actual_state = returned_sqlstate, actual_message = message_text;
   end;
-  raise exception 'ASSERTION FAILED: %', message;
+  if not did_raise then
+    raise exception 'ASSERTION FAILED: % (statement did not raise)', assertion;
+  end if;
+  if expected_state is not null and actual_state <> expected_state then
+    raise exception 'ASSERTION FAILED: % (expected SQLSTATE %, got %)', assertion, expected_state, actual_state;
+  end if;
+  if expected_message is not null and actual_message <> expected_message then
+    raise exception 'ASSERTION FAILED: % (expected message %, got %)', assertion, expected_message, actual_message;
+  end if;
+end $$;
+
+create or replace function pg_temp.assert_complete_error(
+  record_id uuid,
+  lease_token text,
+  response_status integer,
+  response_body jsonb,
+  expected_message text,
+  assertion text
+) returns void
+language plpgsql as $$
+declare
+  did_raise boolean := false;
+  actual_state text;
+  actual_message text;
+begin
+  begin
+    perform public.payment_api_complete_idempotency(record_id, lease_token, response_status, response_body, 'qa-004b-3');
+  exception when others then
+    did_raise := true;
+    get stacked diagnostics actual_state = returned_sqlstate, actual_message = message_text;
+  end;
+  if not did_raise then
+    raise exception 'ASSERTION FAILED: % (completion unexpectedly succeeded)', assertion;
+  end if;
+  if actual_message <> expected_message then
+    raise exception 'ASSERTION FAILED: % (expected message %, got % [%])', assertion, expected_message, actual_message, actual_state;
+  end if;
+end $$;
+
+create or replace function pg_temp.assert_fail_error(
+  record_id uuid,
+  lease_token text,
+  response_status integer,
+  response_body jsonb,
+  expected_message text,
+  assertion text
+) returns void
+language plpgsql as $$
+declare
+  did_raise boolean := false;
+  actual_state text;
+  actual_message text;
+begin
+  begin
+    perform public.payment_api_fail_idempotency(record_id, lease_token, response_status, response_body, 'transient', 'qa-004b-3', 'qa-004b-3', 1);
+  exception when others then
+    did_raise := true;
+    get stacked diagnostics actual_state = returned_sqlstate, actual_message = message_text;
+  end;
+  if not did_raise then
+    raise exception 'ASSERTION FAILED: % (failure unexpectedly succeeded)', assertion;
+  end if;
+  if actual_message <> expected_message then
+    raise exception 'ASSERTION FAILED: % (expected message %, got % [%])', assertion, expected_message, actual_message, actual_state;
+  end if;
 end $$;
 
 -- Use dedicated applications coherent with the P0 tenant fixtures.
@@ -53,7 +122,7 @@ select pg_temp.assert_true(
   ) = 'aa100000-0000-0000-0000-000000000001'::uuid,
   'external reference did not resolve inside tenant/application'
 );
-select pg_temp.assert_rejected($sql$
+select pg_temp.assert_sql_error($sql$
   select public.payment_api_register_external_reference(
     'aaaaaaaa-0000-0000-0000-000000000001',
     'ea000000-0000-0000-0000-000000000001',
@@ -62,15 +131,15 @@ select pg_temp.assert_rejected($sql$
     'same payer',
     'req-ext-invalid'
   )
-$sql$,'unsafe external reference accepted');
-select pg_temp.assert_rejected($sql$
+$sql$,'P0001','invalid external reference request','unsafe external reference accepted');
+select pg_temp.assert_sql_error($sql$
   update public.payment_api_external_references
   set external_reference = 'changed-004b'
   where tenant_id = 'aaaaaaaa-0000-0000-0000-000000000001'
     and application_id = 'ea000000-0000-0000-0000-000000000001'
     and external_reference = 'same-payer-004b'
-$sql$,'external reference was mutable');
-select pg_temp.assert_rejected($sql$
+$sql$,'P0001','external reference is immutable','external reference was mutable');
+select pg_temp.assert_sql_error($sql$
   select public.payment_api_register_external_reference(
     'aaaaaaaa-0000-0000-0000-000000000001',
     'ea000000-0000-0000-0000-000000000001',
@@ -79,7 +148,7 @@ select pg_temp.assert_rejected($sql$
     'cross-tenant-resource',
     'req-ext-cross-tenant'
   )
-$sql$,'cross-tenant resource reference accepted');
+$sql$,'P0001','external reference resource unavailable','cross-tenant resource reference accepted');
 select public.payment_api_register_external_reference(
   'bbbbbbbb-0000-0000-0000-000000000002',
   'fb000000-0000-0000-0000-000000000002',
@@ -230,34 +299,32 @@ select pg_temp.assert_true(
   'live processing was double-acquired'
 );
 
-select pg_temp.assert_rejected($sql$
+select pg_temp.assert_sql_error($sql$
   select public.payment_api_begin_idempotency(
     'aaaaaaaa-0000-0000-0000-000000000001',
     'ea000000-0000-0000-0000-000000000001',
     'GET', 'GET /v1/customers', 'idem-invalid-method', repeat('e', 64), 'req-invalid', 60
   )
-$sql$,'GET idempotency mutation was accepted');
-select pg_temp.assert_rejected($sql$
+$sql$,'P0001','invalid idempotency request','GET idempotency mutation was accepted');
+select pg_temp.assert_sql_error($sql$
   select public.payment_api_begin_idempotency(
     'aaaaaaaa-0000-0000-0000-000000000001',
     'ea000000-0000-0000-0000-000000000001',
     'POST', 'POST /v1/customers', repeat('x', 129), repeat('f', 64), 'req-invalid-key', 60
   )
-$sql$,'oversized idempotency key was accepted');
-select pg_temp.assert_rejected($sql$
-  select public.payment_api_complete_idempotency(
-    (:'live_payload'::jsonb ->> 'record_id')::uuid,
-    (:'live_payload'::jsonb ->> 'lease_token'),
-    201, '{"Authorization":"secret"}'::jsonb, 'req-response-secret'
-  )
-$sql$,'response with Authorization was persisted');
-select pg_temp.assert_rejected($sql$
-  select public.payment_api_complete_idempotency(
-    (:'live_payload'::jsonb ->> 'record_id')::uuid,
-    (:'live_payload'::jsonb ->> 'lease_token'),
-    201, jsonb_build_object('data', repeat('x', 262145)), 'req-response-too-large'
-  )
-$sql$,'oversized response was persisted');
+$sql$,'P0001','invalid idempotency request','oversized idempotency key was accepted');
+select pg_temp.assert_complete_error(
+  (:'live_payload'::jsonb ->> 'record_id')::uuid,
+  (:'live_payload'::jsonb ->> 'lease_token'),
+  201, '{"Authorization":"secret"}'::jsonb,
+  'invalid idempotency response', 'response with Authorization was persisted'
+);
+select pg_temp.assert_complete_error(
+  (:'live_payload'::jsonb ->> 'record_id')::uuid,
+  (:'live_payload'::jsonb ->> 'lease_token'),
+  201, jsonb_build_object('data', repeat('x', 262145)),
+  'invalid idempotency response', 'oversized response was persisted'
+);
 
 select pg_temp.assert_true(
   not exists (
@@ -274,10 +341,10 @@ select pg_temp.assert_true(
   and exists (select 1 from pg_constraint where conname = 'payment_intents_amount_cents_max_004b'),
   'money ceiling constraints were not installed'
 );
-select pg_temp.assert_rejected($sql$
+select pg_temp.assert_sql_error($sql$
   insert into invoices(id,billing_account_id,tenant_id,customer_id,amount_cents,description,status)
   values ('aa300000-0000-0000-0000-000000000099','aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa100000-0000-0000-0000-000000000001',2147483648,'Too large','open')
-$sql$,'amount above PostgreSQL integer ceiling was accepted');
+$sql$,'23514',null,'amount above PostgreSQL integer ceiling was accepted');
 
 select 'P1 004B EXTERNAL REFERENCES: PASS' as result;
 select 'P1 004B HTTP IDEMPOTENCY: PASS' as result;
@@ -312,20 +379,18 @@ select public.payment_api_begin_idempotency(
   'POST', 'POST /v1/fencing', 'idem-004b-fencing', repeat('1',64), 'req-fence-b', 60
 ) as payload
 \gset fence_b_
-select pg_temp.assert_rejected($sql$
-  select public.payment_api_complete_idempotency(
-    (:'fence_a_payload'::jsonb ->> 'record_id')::uuid,
-    (:'fence_a_payload'::jsonb ->> 'lease_token'),
-    200, '{"owner":"A"}'::jsonb, 'req-fence-a-complete'
-  )
-$sql$,'old worker A completion was accepted after reclaim');
-select pg_temp.assert_rejected($sql$
-  select public.payment_api_fail_idempotency(
-    (:'fence_a_payload'::jsonb ->> 'record_id')::uuid,
-    (:'fence_a_payload'::jsonb ->> 'lease_token'),
-    500, '{"owner":"A"}'::jsonb, 'transient', 'old_worker', 'req-fence-a-fail', 1
-  )
-$sql$,'old worker A failure was accepted after reclaim');
+select pg_temp.assert_complete_error(
+  (:'fence_a_payload'::jsonb ->> 'record_id')::uuid,
+  (:'fence_a_payload'::jsonb ->> 'lease_token'),
+  200, '{"owner":"A"}'::jsonb,
+  'idempotency lease invalid', 'old worker A completion was accepted after reclaim'
+);
+select pg_temp.assert_fail_error(
+  (:'fence_a_payload'::jsonb ->> 'record_id')::uuid,
+  (:'fence_a_payload'::jsonb ->> 'lease_token'),
+  500, '{"owner":"A"}'::jsonb,
+  'idempotency lease invalid', 'old worker A failure was accepted after reclaim'
+);
 select public.payment_api_complete_idempotency(
   (:'fence_b_payload'::jsonb ->> 'record_id')::uuid,
   (:'fence_b_payload'::jsonb ->> 'lease_token'),
@@ -338,3 +403,10 @@ select pg_temp.assert_true(
   'final stored result is not owned by worker B'
 );
 \echo 'P1 004B-1 OLD-WORKER FENCING: PASS'
+
+-- 004B-3 semantic sanitizer regression: sensitive concepts blocked, ordinary compounds allowed.
+select pg_temp.assert_true(not public.payment_api_response_is_sanitized('{"stack_trace":"x"}'::jsonb), 'stack_trace was accepted');
+select pg_temp.assert_true(not public.payment_api_response_is_sanitized('{"sql_error":"x"}'::jsonb), 'sql_error was accepted');
+select pg_temp.assert_true(not public.payment_api_response_is_sanitized('{"provider_secret":"x"}'::jsonb), 'provider_secret was accepted');
+select pg_temp.assert_true(public.payment_api_response_is_sanitized('{"tokenized":"ok","passwordPolicy":"ok","stackedItems":"ok"}'::jsonb), 'ordinary compound key was rejected');
+\echo 'P1 004B-3 SANITIZER REGRESSION: PASS'
