@@ -344,7 +344,7 @@ select pg_temp.assert_true(
 select pg_temp.assert_sql_error($sql$
   insert into invoices(id,billing_account_id,tenant_id,customer_id,amount_cents,description,status)
   values ('aa300000-0000-0000-0000-000000000099','aa000000-0000-0000-0000-000000000001','aaaaaaaa-0000-0000-0000-000000000001','aa100000-0000-0000-0000-000000000001',2147483648,'Too large','open')
-$sql$,'23514',null,'amount above PostgreSQL integer ceiling was accepted');
+$sql$,'22003',null,'amount above PostgreSQL integer ceiling was accepted');
 
 select 'P1 004B EXTERNAL REFERENCES: PASS' as result;
 select 'P1 004B HTTP IDEMPOTENCY: PASS' as result;
