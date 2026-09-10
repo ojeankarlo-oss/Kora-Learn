@@ -11,6 +11,9 @@
     "test:p0:boundaries": "node scripts/kora-p0-tenant-boundaries.mjs",
     "test:payments": "node --test tests/payments/*.test.mjs",
     "test:payments:auth": "node --test tests/payments/payment-api-auth.test.mjs",
+    "test:payments:api": "node --test tests/payments/payments-api-foundation.test.mjs",
+    "validate:payments:openapi": "node scripts/validate-payments-openapi.mjs",
+    "test:payments:contract": "npm run validate:payments:openapi && npm run test:payments:api",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -25,6 +28,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
     "oxlint": "^1.71.0",
-    "vite": "^8.1.1"
+    "vite": "^8.1.1",
+    "yaml": "^2.9.0"
   }
 }
