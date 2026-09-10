@@ -282,3 +282,59 @@ $sql$,'amount above PostgreSQL integer ceiling was accepted');
 select 'P1 004B EXTERNAL REFERENCES: PASS' as result;
 select 'P1 004B HTTP IDEMPOTENCY: PASS' as result;
 select 'P1 004B MONEY CEILING: PASS' as result;
+
+-- 004B-1 response sanitizer aliases: case/separator normalization and recursion.
+select pg_temp.assert_true(not public.payment_api_response_is_sanitized('{"apiKey":"x"}'::jsonb), 'camelCase apiKey was accepted');
+select pg_temp.assert_true(not public.payment_api_response_is_sanitized('{"api_key":"x"}'::jsonb), 'snake_case api_key was accepted');
+select pg_temp.assert_true(not public.payment_api_response_is_sanitized('{"api-key":"x"}'::jsonb), 'kebab-case api-key was accepted');
+select pg_temp.assert_true(not public.payment_api_response_is_sanitized('{"AccessToken":"x"}'::jsonb), 'uppercase/case access token was accepted');
+select pg_temp.assert_true(not public.payment_api_response_is_sanitized('{"nested":{"credential_secret":"x"}}'::jsonb), 'nested credential secret was accepted');
+select pg_temp.assert_true(not public.payment_api_response_is_sanitized('{"items":[{"providerAccountId":"x"}]}'::jsonb), 'array provider account id was accepted');
+select pg_temp.assert_true(not public.payment_api_response_is_sanitized('{"refresh-token":"x"}'::jsonb), 'kebab refresh token was accepted');
+select pg_temp.assert_true(not public.payment_api_response_is_sanitized('{"privateKey":"x"}'::jsonb), 'camelCase private key was accepted');
+select pg_temp.assert_true(public.payment_api_response_is_sanitized('{"displayName":"safe","note":"safe"}'::jsonb), 'non-sensitive keys were rejected');
+
+\echo 'P1 004B-1 SANITIZER ALIASES: PASS'
+
+-- 004B-1 direct old-worker fencing: A expires, B reclaims, A cannot finalize, B owns result.
+select public.payment_api_begin_idempotency(
+  'aaaaaaaa-0000-0000-0000-000000000001',
+  'ea000000-0000-0000-0000-000000000001',
+  'POST', 'POST /v1/fencing', 'idem-004b-fencing', repeat('1',64), 'req-fence-a', 60
+) as payload
+\gset fence_a_
+update public.payment_api_idempotency
+set lease_expires_at = pg_catalog.now() - interval '1 second'
+where id = (:'fence_a_payload'::jsonb ->> 'record_id')::uuid;
+select public.payment_api_begin_idempotency(
+  'aaaaaaaa-0000-0000-0000-000000000001',
+  'ea000000-0000-0000-0000-000000000001',
+  'POST', 'POST /v1/fencing', 'idem-004b-fencing', repeat('1',64), 'req-fence-b', 60
+) as payload
+\gset fence_b_
+select pg_temp.assert_rejected($sql$
+  select public.payment_api_complete_idempotency(
+    (:'fence_a_payload'::jsonb ->> 'record_id')::uuid,
+    (:'fence_a_payload'::jsonb ->> 'lease_token'),
+    200, '{"owner":"A"}'::jsonb, 'req-fence-a-complete'
+  )
+$sql$,'old worker A completion was accepted after reclaim');
+select pg_temp.assert_rejected($sql$
+  select public.payment_api_fail_idempotency(
+    (:'fence_a_payload'::jsonb ->> 'record_id')::uuid,
+    (:'fence_a_payload'::jsonb ->> 'lease_token'),
+    500, '{"owner":"A"}'::jsonb, 'transient', 'old_worker', 'req-fence-a-fail', 1
+  )
+$sql$,'old worker A failure was accepted after reclaim');
+select public.payment_api_complete_idempotency(
+  (:'fence_b_payload'::jsonb ->> 'record_id')::uuid,
+  (:'fence_b_payload'::jsonb ->> 'lease_token'),
+  200, '{"owner":"B"}'::jsonb, 'req-fence-b-complete'
+);
+select pg_temp.assert_true(
+  (select state = 'completed' and response_body ->> 'owner' = 'B'
+   from public.payment_api_idempotency
+   where id = (:'fence_b_payload'::jsonb ->> 'record_id')::uuid),
+  'final stored result is not owned by worker B'
+);
+\echo 'P1 004B-1 OLD-WORKER FENCING: PASS'

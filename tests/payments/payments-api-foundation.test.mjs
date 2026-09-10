@@ -16,10 +16,42 @@ import {
   validateRouteRegistry,
 } from "../../src/lib/payments/http.js";
 import { FUTURE_FINANCIAL_PATHS, PAYMENTS_API_ROUTES } from "../../src/lib/payments/api-contract.js";
+import { parseJsonRejectDuplicateKeys, DuplicateJsonKeyError } from "../../src/lib/payments/json-duplicate.js";
 
 const tenantId = "11111111-1111-4111-8111-111111111111";
 const applicationId = "22222222-2222-4222-8222-222222222222";
 const credentialId = "33333333-3333-4333-8333-333333333333";
+
+
+test("parser estrutural rejeita chaves duplicadas na raiz, nested, arrays e após escape JSON", () => {
+  for (const source of [
+    '{"amount":100,"amount":200}',
+    '{"customer":{"id":"a","id":"b"}}',
+    '{"items":[{"id":"a","id":"b"}]}',
+    '{"a":1,"\\u0061":2}',
+  ]) {
+    assert.throws(() => parseJsonRejectDuplicateKeys(source), DuplicateJsonKeyError);
+  }
+  assert.deepEqual(parseJsonRejectDuplicateKeys('{"safe":true,"nested":[{"value":1}]}'), { safe: true, nested: [{ value: 1 }] });
+});
+
+
+test("parseJsonBody mantém erro controlado para JSON duplicado e aceita JSON válido", async () => {
+  const duplicate = await parseJsonBody(new Request("https://payments.test/v1", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: '{"name":"a","name":"b"}',
+  }));
+  assert.deepEqual(duplicate, { ok: false, status: 400, code: "invalid_request", message: "Request validation failed" });
+
+  const valid = await parseJsonBody(new Request("https://payments.test/v1", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: '{ "name": "a", "nested": { "id": 1 } }',
+  }));
+  assert.equal(valid.ok, true);
+  assert.deepEqual(valid.value, { name: "a", nested: { id: 1 } });
+});
 
 async function fixture({ status = "active", provenance = "server_csprng_v1", scopes = ["payments:read"] } = {}) {
   const built = await buildCredentialRecord({
