@@ -4,7 +4,7 @@ set -euo pipefail
 workdir=$(mktemp -d)
 trap 'rm -rf "$workdir"' EXIT
 
-sql="select public.payment_api_begin_idempotency('aaaaaaaa-0000-0000-0000-000000000001','ca000000-0000-0000-0000-000000000001','POST','POST /v1/customers','idem-004b-race',repeat('9',64),'req-race',60);"
+sql="select public.payment_api_begin_idempotency('aaaaaaaa-0000-0000-0000-000000000001','ea000000-0000-0000-0000-000000000001','POST','POST /v1/customers','idem-004b-race',repeat('9',64),'req-race',60);"
 
 (psql -X -v ON_ERROR_STOP=1 -At -c "$sql" >"$workdir/one.out") &
 first_pid=$!
