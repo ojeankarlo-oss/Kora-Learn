@@ -394,32 +394,29 @@ $$;
 
 create or replace function public.payment_api_response_is_sanitized(p_body jsonb)
 returns boolean
-language sql
+language plpgsql
 immutable
+set search_path = pg_catalog, public
 as $$
-with recursive nodes(value) as (
-  select p_body
-  union all
-  select child.value
-  from nodes
-  cross join lateral jsonb_each(
-    case when jsonb_typeof(nodes.value) = 'object' then nodes.value else '{}'::jsonb end
-  ) child
-  union all
-  select child.value
-  from nodes
-  cross join lateral jsonb_array_elements(
-    case when jsonb_typeof(nodes.value) = 'array' then nodes.value else '[]'::jsonb end
-  ) child
-)
-select not exists (
-  select 1
-  from nodes
-  cross join lateral jsonb_object_keys(
-    case when jsonb_typeof(nodes.value) = 'object' then nodes.value else '{}'::jsonb end
-  ) as keys(key)
-  where lower(keys.key) ~ '(authorization|secret|access_token|refresh_token|client_secret|private_key|password|stack|sql|provider_payment_id|provider_account_id)'
-);
+declare
+  item jsonb;
+  key text;
+begin
+  if p_body is null then return false; end if;
+  if jsonb_typeof(p_body) = 'object' then
+    for key, item in select key, value from jsonb_each(p_body) loop
+      if lower(key) ~ '(authorization|secret|access_token|refresh_token|client_secret|private_key|password|stack|sql|provider_payment_id|provider_account_id)' then
+        return false;
+      end if;
+      if not public.payment_api_response_is_sanitized(item) then return false; end if;
+    end loop;
+  elsif jsonb_typeof(p_body) = 'array' then
+    for item in select value from jsonb_array_elements(p_body) loop
+      if not public.payment_api_response_is_sanitized(item) then return false; end if;
+    end loop;
+  end if;
+  return true;
+end;
 $$;
 
 revoke all on function public.payment_api_response_is_sanitized(jsonb) from public, anon, authenticated;
