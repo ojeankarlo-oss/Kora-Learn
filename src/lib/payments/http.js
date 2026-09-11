@@ -1,5 +1,6 @@
 import { authenticatePaymentCredential, rejectCallerTenantOverride, requirePaymentScope } from "./auth.js";
 import { validateIdempotencyHeader } from "./idempotency.js";
+import { parseJsonRejectDuplicateKeys } from "./json-duplicate.js";
 
 export const API_ROOT = "/v1";
 export const MAX_REQUEST_BODY_BYTES = 64 * 1024;
@@ -143,7 +144,7 @@ export async function parseJsonBody(req, { allowedFields = null, maxBytes = MAX_
   let value;
   try {
     value = new TextDecoder("utf-8", { fatal: true }).decode(body.bytes);
-    value = JSON.parse(value);
+    value = parseJsonRejectDuplicateKeys(value);
   } catch {
     return invalidRequest("Request validation failed");
   }

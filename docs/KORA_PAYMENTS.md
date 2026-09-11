@@ -38,3 +38,13 @@ O fluxo de produto permanece:
 `Consumer → KORA Payments API /v1 → M2M Auth → Tenant Context → Billing Core → Provider Adapter`.
 
 Produtos consumidores nunca chamam Asaas diretamente. A API `/v1` deverá evoluir para `/v2` por meio de novos módulos de versão, sem espalhar condicionais de versão pelos handlers existentes.
+
+## P1-PAY-API-004B — External References e HTTP Idempotency Foundation
+
+A migration 034 adiciona `payment_api_external_references` como registry provider-neutral, tenant/application-scoped e imutável. A referência externa é apenas correlação de recurso; a autoridade permanece `credential → application → tenant`. O registry suporta `customer`, `invoice` e resource types futuros sem acoplar o schema ao ENEM, rejeita recursos de outro tenant e mantém unicidade real por tenant, application, resource type e external reference.
+
+A mesma migration adiciona `payment_api_idempotency`, com escopo tenant/application/HTTP method/operation/Idempotency-Key, fingerprint SHA-256 sobre JSON canônico com chaves ordenadas, replay determinístico, conflito para fingerprint divergente e lease server-side para impedir execução concorrente duplicada. Estados persistidos são `processing`, `completed` e `failed`; falhas determinísticas fazem replay, falhas transitórias podem ser reexecutadas após `retry_at`, e leases expirados podem ser recuperados sem deixar processamento permanentemente travado. Nenhum Authorization header, secret ou stack é persistido.
+
+A idempotência HTTP não substitui a idempotência financeira da `payment_intents` canônica da migration 031. O registry HTTP protege transporte e replay; a RPC de Billing Core continua sendo a autoridade financeira. Nenhum endpoint Customers, Invoices ou Payment Intent é implementado nesta etapa.
+
+O Billing Core atual usa PostgreSQL `integer` para os valores monetários em minor units. O limite canônico da foundation é, portanto, `2147483647` minor units, refletido em constraints aditivas, runtime e documentação futura; a foundation não amplia tipos de banco automaticamente para acomodar `Number.MAX_SAFE_INTEGER`.

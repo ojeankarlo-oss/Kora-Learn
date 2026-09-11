@@ -129,14 +129,14 @@ components:
       properties:
         amount:
           type: integer
-          minimum: 0
-          maximum: 9007199254740991
-          description: Integer minor units. Floating point values are forbidden; BRL 12990 represents R$129,90.
+          minimum: 1
+          maximum: 2147483647
+          description: Integer minor units bounded by PostgreSQL integer persistence. BRL 12990 represents R$129,90.
         currency:
           $ref: '#/components/schemas/Currency'
     Currency:
       type: string
-      enum: [BRL, USD, EUR]
+      enum: [BRL]
     HealthResponse:
       type: object
       additionalProperties: false

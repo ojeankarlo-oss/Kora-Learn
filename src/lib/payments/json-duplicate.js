@@ -1,0 +1,182 @@
+import { canonicalizeNumericLexeme } from "./numeric.js";
+
+export class DuplicateJsonKeyError extends SyntaxError {
+  constructor() {
+    super("Duplicate JSON object key");
+    this.name = "DuplicateJsonKeyError";
+    this.code = "DUPLICATE_JSON_KEY";
+  }
+}
+
+export class InvalidJsonError extends SyntaxError {
+  constructor() {
+    super("Invalid JSON");
+    this.name = "InvalidJsonError";
+    this.code = "INVALID_JSON";
+  }
+}
+
+const WHITESPACE = new Set([" ", "\n", "\r", "\t"]);
+const SIMPLE_ESCAPES = new Set(["\"", "\\", "/", "b", "f", "n", "r", "t"]);
+const NUMERIC_LEXEMES = new WeakMap();
+const ROOT_NUMERIC_LEXEM = Symbol("rootNumericLexeme");
+
+function fail() {
+  throw new InvalidJsonError();
+}
+
+export function getNumericLexeme(value, key) {
+  return NUMERIC_LEXEMES.get(value)?.get(key);
+}
+
+export function getRootNumericLexeme(value) {
+  return value && typeof value === "object" ? value[ROOT_NUMERIC_LEXEM] : undefined;
+}
+
+export function parseJsonRejectDuplicateKeys(source) {
+  if (typeof source !== "string") fail();
+  let index = 0;
+
+  function skipWhitespace() {
+    while (index < source.length && WHITESPACE.has(source[index])) index += 1;
+  }
+
+  function parseString() {
+    const start = index;
+    if (source[index] !== '"') fail();
+    index += 1;
+    while (index < source.length) {
+      const character = source[index];
+      if (character === '"') {
+        index += 1;
+        try {
+          return JSON.parse(source.slice(start, index));
+        } catch {
+          fail();
+        }
+      }
+      if (character === "\\") {
+        index += 1;
+        if (index >= source.length) fail();
+        const escape = source[index];
+        if (escape === "u") {
+          if (!/^[0-9a-fA-F]{4}$/.test(source.slice(index + 1, index + 5))) fail();
+          index += 5;
+          continue;
+        }
+        if (!SIMPLE_ESCAPES.has(escape)) fail();
+        index += 1;
+        continue;
+      }
+      if (character.charCodeAt(0) < 0x20) fail();
+      index += 1;
+    }
+    fail();
+  }
+
+  function parseNumber() {
+    const match = source.slice(index).match(/^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/);
+    if (!match) fail();
+    index += match[0].length;
+    const lexeme = match[0];
+    const value = Number(lexeme);
+    if (!Number.isFinite(value)) fail();
+    return { value, numericMetadata: canonicalizeNumericLexeme(lexeme) };
+  }
+
+  function parseArray() {
+    index += 1;
+    skipWhitespace();
+    const result = [];
+    const numericMetadata = new Map();
+    if (source[index] === "]") {
+      index += 1;
+      NUMERIC_LEXEMES.set(result, numericMetadata);
+      return { value: result };
+    }
+    while (true) {
+      const parsed = parseValue();
+      const arrayIndex = result.length;
+      result.push(parsed.value);
+      if (parsed.numericMetadata !== undefined) numericMetadata.set(arrayIndex, parsed.numericMetadata);
+      skipWhitespace();
+      if (source[index] === "]") {
+        index += 1;
+        NUMERIC_LEXEMES.set(result, numericMetadata);
+        return { value: result };
+      }
+      if (source[index] !== ",") fail();
+      index += 1;
+      skipWhitespace();
+    }
+  }
+
+  function parseObject() {
+    index += 1;
+    skipWhitespace();
+    const result = {};
+    const keys = new Set();
+    const numericMetadata = new Map();
+    if (source[index] === "}") {
+      index += 1;
+      NUMERIC_LEXEMES.set(result, numericMetadata);
+      return { value: result };
+    }
+    while (true) {
+      const key = parseString();
+      if (keys.has(key)) throw new DuplicateJsonKeyError();
+      keys.add(key);
+      skipWhitespace();
+      if (source[index] !== ":") fail();
+      index += 1;
+      skipWhitespace();
+      const parsed = parseValue();
+      Object.defineProperty(result, key, {
+        value: parsed.value,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+      if (parsed.numericMetadata !== undefined) numericMetadata.set(key, parsed.numericMetadata);
+      skipWhitespace();
+      if (source[index] === "}") {
+        index += 1;
+        NUMERIC_LEXEMES.set(result, numericMetadata);
+        return { value: result };
+      }
+      if (source[index] !== ",") fail();
+      index += 1;
+      skipWhitespace();
+    }
+  }
+
+  function parseValue() {
+    skipWhitespace();
+    const character = source[index];
+    if (character === "{") return parseObject();
+    if (character === "[") return parseArray();
+    if (character === '"') return { value: parseString() };
+    if (source.startsWith("true", index)) {
+      index += 4;
+      return { value: true };
+    }
+    if (source.startsWith("false", index)) {
+      index += 5;
+      return { value: false };
+    }
+    if (source.startsWith("null", index)) {
+      index += 4;
+      return { value: null };
+    }
+    if (character === "-" || (character >= "0" && character <= "9")) return parseNumber();
+    fail();
+  }
+
+  const parsed = parseValue();
+  skipWhitespace();
+  if (index !== source.length) fail();
+  if (parsed.numericMetadata !== undefined && parsed.value && typeof parsed.value === "object") {
+    Object.defineProperty(parsed.value, ROOT_NUMERIC_LEXEM, { value: parsed.numericMetadata, enumerable: false });
+  }
+  return parsed.value;
+}

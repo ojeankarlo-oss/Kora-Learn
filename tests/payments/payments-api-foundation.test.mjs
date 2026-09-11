@@ -4,7 +4,7 @@ import { buildCredentialRecord } from "../../src/lib/payments/credential.js";
 import { readFileSync } from "node:fs";
 import { parse } from "yaml";
 import { validatePaymentsOpenApi } from "../../scripts/validate-payments-openapi.mjs";
-import { MONEY_SCHEMA, parseMoney } from "../../src/lib/payments/money.js";
+import { MAX_MONEY_MINOR_UNITS, MONEY_SCHEMA, parseMoney } from "../../src/lib/payments/money.js";
 import { idempotencyPolicy, validateIdempotencyHeader } from "../../src/lib/payments/idempotency.js";
 import { createMemoryRateLimiter, buildRateLimitKey, rateLimitPolicy } from "../../src/lib/payments/rate-limit.js";
 import {
@@ -16,10 +16,58 @@ import {
   validateRouteRegistry,
 } from "../../src/lib/payments/http.js";
 import { FUTURE_FINANCIAL_PATHS, PAYMENTS_API_ROUTES } from "../../src/lib/payments/api-contract.js";
+import { parseJsonRejectDuplicateKeys, DuplicateJsonKeyError } from "../../src/lib/payments/json-duplicate.js";
+import { fingerprintJson } from "../../src/lib/payments/fingerprint.js";
 
 const tenantId = "11111111-1111-4111-8111-111111111111";
 const applicationId = "22222222-2222-4222-8222-222222222222";
 const credentialId = "33333333-3333-4333-8333-333333333333";
+
+
+test("parser estrutural rejeita chaves duplicadas na raiz, nested, arrays e após escape JSON", () => {
+  for (const source of [
+    '{"amount":100,"amount":200}',
+    '{"customer":{"id":"a","id":"b"}}',
+    '{"items":[{"id":"a","id":"b"}]}',
+    `{"a":1,"${"\\" + "u0061"}":2}`,
+  ]) {
+    assert.throws(() => parseJsonRejectDuplicateKeys(source), DuplicateJsonKeyError);
+  }
+  assert.deepEqual(parseJsonRejectDuplicateKeys('{"safe":true,"nested":[{"value":1}]}'), { safe: true, nested: [{ value: 1 }] });
+});
+
+
+test("JSON special keys remain own enumerable properties without prototype mutation", async () => {
+  const value = parseJsonRejectDuplicateKeys('{"__proto__":{"amount":200},"constructor":"safe","prototype":{"nested":true},"items":[{"__proto__":{"inside":1}}]}');
+  assert.equal(Object.getPrototypeOf(value), Object.prototype);
+  assert.equal(Object.prototype.hasOwnProperty.call(value, "__proto__"), true);
+  assert.equal(Object.keys(value).includes("__proto__"), true);
+  assert.deepEqual(value.__proto__, { amount: 200 });
+  assert.equal(value.amount, undefined);
+  assert.equal(Object.prototype.hasOwnProperty.call(value, "constructor"), true);
+  assert.equal(Object.prototype.hasOwnProperty.call(value, "prototype"), true);
+  assert.equal(Object.prototype.hasOwnProperty.call(value.items[0], "__proto__"), true);
+  assert.deepEqual(value.items[0].__proto__, { inside: 1 });
+  assert.equal(Object.getPrototypeOf(Object.prototype), null);
+  assert.notEqual(await fingerprintJson(value), await fingerprintJson({}));
+});
+
+test("parseJsonBody mantém erro controlado para JSON duplicado e aceita JSON válido", async () => {
+  const duplicate = await parseJsonBody(new Request("https://payments.test/v1", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: '{"name":"a","name":"b"}',
+  }));
+  assert.deepEqual(duplicate, { ok: false, status: 400, code: "invalid_request", message: "Request validation failed" });
+
+  const valid = await parseJsonBody(new Request("https://payments.test/v1", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: '{ "name": "a", "nested": { "id": 1 } }',
+  }));
+  assert.equal(valid.ok, true);
+  assert.deepEqual(valid.value, { name: "a", nested: { id: 1 } });
+});
 
 async function fixture({ status = "active", provenance = "server_csprng_v1", scopes = ["payments:read"] } = {}) {
   const built = await buildCredentialRecord({
@@ -248,9 +296,10 @@ test("handler failure não vaza stack, SQL, secret ou internals", async () => {
 
 test("money rejeita float e aceita minor units inteiras/currency válida", () => {
   assert.equal(parseMoney({ amount: 12990, currency: "BRL" }).ok, true);
-  assert.equal(parseMoney({ amount: Number.MAX_SAFE_INTEGER, currency: "BRL" }).ok, true);
-  assert.equal(parseMoney({ amount: Number.MAX_SAFE_INTEGER + 1, currency: "BRL" }).ok, false);
-  assert.equal(MONEY_SCHEMA.properties.amount.maximum, Number.MAX_SAFE_INTEGER);
+  assert.equal(parseMoney({ amount: 0, currency: "BRL" }).ok, false);
+  assert.equal(parseMoney({ amount: MAX_MONEY_MINOR_UNITS, currency: "BRL" }).ok, true);
+  assert.equal(parseMoney({ amount: MAX_MONEY_MINOR_UNITS + 1, currency: "BRL" }).ok, false);
+  assert.equal(MONEY_SCHEMA.properties.amount.maximum, MAX_MONEY_MINOR_UNITS);
   assert.equal(parseMoney({ amount: 129.9, currency: "BRL" }).ok, false);
   assert.equal(parseMoney({ amount: 12990, currency: "XYZ" }).ok, false);
 });
