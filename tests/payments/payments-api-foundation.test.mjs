@@ -29,7 +29,7 @@ test("parser estrutural rejeita chaves duplicadas na raiz, nested, arrays e apó
     '{"amount":100,"amount":200}',
     '{"customer":{"id":"a","id":"b"}}',
     '{"items":[{"id":"a","id":"b"}]}',
-    '{"a":1,"\\u0061":2}',
+    `{"a":1,"${"\\" + "u0061"}":2}`,
   ]) {
     assert.throws(() => parseJsonRejectDuplicateKeys(source), DuplicateJsonKeyError);
   }

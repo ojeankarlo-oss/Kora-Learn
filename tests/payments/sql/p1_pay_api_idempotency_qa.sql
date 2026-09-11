@@ -410,3 +410,56 @@ select pg_temp.assert_true(not public.payment_api_response_is_sanitized('{"sql_e
 select pg_temp.assert_true(not public.payment_api_response_is_sanitized('{"provider_secret":"x"}'::jsonb), 'provider_secret was accepted');
 select pg_temp.assert_true(public.payment_api_response_is_sanitized('{"tokenized":"ok","passwordPolicy":"ok","stackedItems":"ok"}'::jsonb), 'ordinary compound key was rejected');
 \echo 'P1 004B-3 SANITIZER REGRESSION: PASS'
+
+-- 004B-6 case-fold regression: complete sensitive identifiers are invariant
+-- to case and separators while benign compound identifiers remain usable.
+select pg_temp.assert_true(
+  not exists (
+    select 1
+    from (values
+      ('apiKey'), ('ApiKey'), ('APIKEY'), ('api_key'), ('API_KEY'), ('api-key'), ('API-KEY'), ('api key'),
+      ('accessToken'), ('AccessToken'), ('ACCESSTOKEN'), ('access_token'), ('ACCESS_TOKEN'), ('access-token'), ('ACCESS-TOKEN'), ('access token'),
+      ('refreshToken'), ('RefreshToken'), ('REFRESHTOKEN'), ('refresh_token'), ('REFRESH_TOKEN'), ('refresh-token'), ('refresh token'),
+      ('clientSecret'), ('ClientSecret'), ('CLIENTSECRET'), ('client_secret'), ('CLIENT_SECRET'), ('client-secret'), ('client secret'),
+      ('credentialSecret'), ('CredentialSecret'), ('CREDENTIALSECRET'), ('credential_secret'), ('CREDENTIAL_SECRET'), ('credential-secret'),
+      ('privateKey'), ('PrivateKey'), ('PRIVATEKEY'), ('private_key'), ('PRIVATE_KEY'), ('private-key'), ('private key'),
+      ('authorization'), ('AUTHORIZATION'), ('token'), ('TOKEN'), ('password'), ('PASSWORD'),
+      ('stack'), ('stackTrace'), ('STACKTRACE'), ('stack_trace'),
+      ('sql'), ('sqlError'), ('SQLERROR'), ('sql_error'),
+      ('providerSecret'), ('PROVIDERSECRET'), ('provider_secret'),
+      ('providerPaymentId'), ('PROVIDERPAYMENTID'), ('provider_payment_id'),
+      ('providerAccountId'), ('PROVIDERACCOUNTID'), ('provider_account_id')
+    ) as sensitive(json_key)
+    where public.payment_api_response_is_sanitized(
+      pg_catalog.jsonb_build_object(sensitive.json_key, 'must-not-persist')
+    )
+  ),
+  'case/separator variant bypassed response sanitization'
+);
+
+select pg_temp.assert_true(
+  not public.payment_api_response_is_sanitized(
+    '{"level1":{"APIKEY":"x"}}'::jsonb
+  ),
+  'nested object bypassed case-fold sanitization'
+);
+select pg_temp.assert_true(
+  not public.payment_api_response_is_sanitized(
+    '{"items":[{"ACCESSTOKEN":"x"}]}'::jsonb
+  ),
+  'object in array bypassed case-fold sanitization'
+);
+select pg_temp.assert_true(
+  not public.payment_api_response_is_sanitized(
+    '{"items":[[{"CLIENTSECRET":"x"}]]}'::jsonb
+  ),
+  'nested arrays bypassed case-fold sanitization'
+);
+select pg_temp.assert_true(
+  public.payment_api_response_is_sanitized(
+    '{"tokenized":"ok","passwordPolicy":"ok","stackedItems":"ok","sqlDialect":"ok","privateLabel":"ok","accessLevel":"ok","clientName":"ok","providerName":"ok"}'::jsonb
+  ),
+  'benign semantic identifiers were rejected'
+);
+
+\echo 'P1 004B-6 SANITIZER CASEFOLD: PASS'
