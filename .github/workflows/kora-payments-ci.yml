@@ -119,6 +119,9 @@ jobs:
       - name: Run PostgreSQL Payments API idempotency and external reference invariants
         run: psql -v ON_ERROR_STOP=1 -f tests/payments/sql/p1_pay_api_idempotency_qa.sql
 
+      - name: Run PostgreSQL Customer API foundation invariants
+        run: psql -v ON_ERROR_STOP=1 -f tests/payments/sql/p1_pay_api_customer_foundation_qa.sql
+
       - name: Run webhook concurrency with two connections
         shell: bash
         run: bash tests/payments/sql/concurrency.sh
@@ -130,6 +133,10 @@ jobs:
       - name: Run concurrent HTTP idempotency acquisition
         shell: bash
         run: bash tests/payments/sql/idempotency-concurrency.sh
+
+      - name: Run concurrent Customer creation
+        shell: bash
+        run: bash tests/payments/sql/customer-concurrency.sh
 
       - name: Run Node payment tests
         run: npm ci && npm run test:payments
