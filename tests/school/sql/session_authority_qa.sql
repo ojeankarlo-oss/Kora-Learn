@@ -15,9 +15,6 @@ begin
   if not coalesce(p_ok, false) then raise exception 'SCHOOL QA FAIL: %', p_name; end if;
 end $$;
 
--- The disposable auth.users fixture lacks the confirmation column checked by migration 039.
-alter table auth.users add column if not exists email_confirmed_at timestamptz;
-
 insert into auth.users(id,email,email_confirmed_at) values
  ('ba000000-0000-0000-0000-000000000001','school-admin@local.invalid',now()),
  ('ba000000-0000-0000-0000-000000000002','school-user@local.invalid',now()),

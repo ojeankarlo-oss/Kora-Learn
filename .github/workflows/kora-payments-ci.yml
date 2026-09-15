@@ -72,6 +72,12 @@ jobs:
       - name: Install PostgreSQL client
         run: sudo apt-get update && sudo apt-get install --yes postgresql-client
 
+      - name: Prepare disposable Auth confirmation schema
+        run: >-
+          psql -U supabase_admin -v ON_ERROR_STOP=1
+          -c "SET ROLE supabase_auth_admin;
+          ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS email_confirmed_at timestamptz;"
+
       - name: Bootstrap disposable Supabase compatibility schemas
         run: psql -v ON_ERROR_STOP=1 -f tests/payments/sql/bootstrap.sql
 
