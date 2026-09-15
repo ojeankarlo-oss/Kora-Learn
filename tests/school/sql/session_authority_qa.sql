@@ -71,9 +71,9 @@ select pg_temp.assert_true(not pg_temp.attempt($q$update public.usuarios set aut
 
 -- T16: convite institucional reutilizado (consumed_at já preenchido)
 -- Use um cadastro pendente novo: bd...005 foi consumido no T12 legítimo acima.
+select set_config('request.jwt.claim.sub','ba000000-0000-0000-0000-000000000001',false);
 insert into public.usuarios(id,auth_user_id,tenant_id,perfil,nome,email,ativo) values
  ('bd000000-0000-0000-0000-000000000007',null,'bb000000-0000-0000-0000-000000000001','aluno','Reuse Target','school-reuse@local.invalid',true);
-select set_config('request.jwt.claim.sub','ba000000-0000-0000-0000-000000000001',false);
 select pg_temp.assert_true(length(public.criar_convite_vinculo('bd000000-0000-0000-0000-000000000007')) = 64,'T16 invitation issuance for reuse test');
 select public.criar_convite_vinculo('bd000000-0000-0000-0000-000000000007') as convite_t16 \gset
 select set_config('request.jwt.claim.sub','ba000000-0000-0000-0000-000000000006',false);
@@ -82,9 +82,9 @@ select pg_temp.assert_true(not pg_temp.attempt($q$select public.vincular_minha_c
 
 -- T17: takeover/rebind indevido de auth_user_id
 -- T17a: identidade já vinculada tenta vincular outro cadastro (takeover)
+select set_config('request.jwt.claim.sub','ba000000-0000-0000-0000-000000000001',false);
 insert into public.usuarios(id,auth_user_id,tenant_id,perfil,nome,email,ativo) values
  ('bd000000-0000-0000-0000-000000000006',null,'bb000000-0000-0000-0000-000000000001','aluno','Takeover Target','takeover@local.invalid',true);
-select set_config('request.jwt.claim.sub','ba000000-0000-0000-0000-000000000001',false);
 select pg_temp.assert_true(length(public.criar_convite_vinculo('bd000000-0000-0000-0000-000000000006')) = 64,'T17 invite for takeover target');
 select public.criar_convite_vinculo('bd000000-0000-0000-0000-000000000006') as convite_t17 \gset
 select set_config('request.jwt.claim.sub','ba000000-0000-0000-0000-000000000005',false);
