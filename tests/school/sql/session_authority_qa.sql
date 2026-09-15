@@ -19,7 +19,9 @@ insert into auth.users(id,email,email_confirmed_at) values
  ('ba000000-0000-0000-0000-000000000001','school-admin@local.invalid',now()),
  ('ba000000-0000-0000-0000-000000000002','school-user@local.invalid',now()),
  ('ba000000-0000-0000-0000-000000000003','school-inactive@local.invalid',now()),
- ('ba000000-0000-0000-0000-000000000004','school-new@local.invalid',now());
+ ('ba000000-0000-0000-0000-000000000004','school-new@local.invalid',now()),
+ ('ba000000-0000-0000-0000-000000000005','takeover@local.invalid',now()),
+ ('ba000000-0000-0000-0000-000000000006','school-reuse@local.invalid',now());
 insert into public.tenants(id,nome,slug) values
  ('bb000000-0000-0000-0000-000000000001','School A QA','school-a-qa'),
  ('bb000000-0000-0000-0000-000000000002','School B QA','school-b-qa');
@@ -69,8 +71,6 @@ select pg_temp.assert_true(not pg_temp.attempt($q$update public.usuarios set aut
 
 -- T16: convite institucional reutilizado (consumed_at já preenchido)
 -- Use um cadastro pendente novo: bd...005 foi consumido no T12 legítimo acima.
-insert into auth.users(id,email,email_confirmed_at) values
- ('ba000000-0000-0000-0000-000000000006','school-reuse@local.invalid',now());
 insert into public.usuarios(id,auth_user_id,tenant_id,perfil,nome,email,ativo) values
  ('bd000000-0000-0000-0000-000000000007',null,'bb000000-0000-0000-0000-000000000001','aluno','Reuse Target','school-reuse@local.invalid',true);
 select set_config('request.jwt.claim.sub','ba000000-0000-0000-0000-000000000001',false);
@@ -82,8 +82,6 @@ select pg_temp.assert_true(not pg_temp.attempt($q$select public.vincular_minha_c
 
 -- T17: takeover/rebind indevido de auth_user_id
 -- T17a: identidade já vinculada tenta vincular outro cadastro (takeover)
-insert into auth.users(id,email,email_confirmed_at) values
- ('ba000000-0000-0000-0000-000000000005','takeover@local.invalid',now());
 insert into public.usuarios(id,auth_user_id,tenant_id,perfil,nome,email,ativo) values
  ('bd000000-0000-0000-0000-000000000006',null,'bb000000-0000-0000-0000-000000000001','aluno','Takeover Target','takeover@local.invalid',true);
 select set_config('request.jwt.claim.sub','ba000000-0000-0000-0000-000000000001',false);
