@@ -34,6 +34,16 @@ export async function entrarComEmail(email, senha) {
     password: senha,
   });
   if (error) throw error;
+  const convite = new URLSearchParams(window.location.search).get("convite");
+  if (convite && data.user) {
+    const { data: existente, error: consultaError } = await supabase.from("usuarios")
+      .select("id").eq("auth_user_id", data.user.id).maybeSingle();
+    if (consultaError) throw consultaError;
+    if (!existente) {
+      const { error: vinculoError } = await supabase.rpc("vincular_minha_conta", { p_convite: convite });
+      if (vinculoError) throw vinculoError;
+    }
+  }
   return data.user;
 }
 
@@ -394,10 +404,11 @@ export async function removerArquivoConteudoCurso(path) {
   if (error) throw error;
 }
 
-export async function primeiroAcesso(email, senha) {
+export async function primeiroAcesso(email, senha, convite) {
   const { data, error } = await supabase.auth.signUp({ email, password: senha });
   if (error) throw error;
-  const { data: vinculado, error: e2 } = await supabase.rpc("vincular_minha_conta");
+  if (!convite || !data.session) return { user: data.user, vinculado: false, needsConfirmation: !!data.user && !data.session };
+  const { data: vinculado, error: e2 } = await supabase.rpc("vincular_minha_conta", { p_convite: convite });
   if (e2) throw e2;
   return { user: data.user, vinculado, needsConfirmation: !!data.user && !data.session };
 }

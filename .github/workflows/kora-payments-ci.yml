@@ -122,6 +122,9 @@ jobs:
       - name: Run PostgreSQL Customer API foundation invariants
         run: psql -v ON_ERROR_STOP=1 -f tests/payments/sql/p1_pay_api_customer_foundation_qa.sql
 
+      - name: Run School session authority negative tests
+        run: psql -v ON_ERROR_STOP=1 -f tests/school/sql/session_authority_qa.sql
+
       - name: Run webhook concurrency with two connections
         shell: bash
         run: bash tests/payments/sql/concurrency.sh
