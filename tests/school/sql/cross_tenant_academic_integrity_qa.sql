@@ -14,6 +14,24 @@ exception when others then
   get stacked diagnostics v_state=returned_sqlstate;
   return v_state in ('23502','23503','23514');
 end $$;
+create or replace function pg_temp.denied_by_constraint(p_sql text,p_constraint text) returns boolean language plpgsql as $$
+declare v_state text; v_constraint text;
+begin
+  execute p_sql;
+  return false;
+exception when others then
+  get stacked diagnostics v_state=returned_sqlstate,v_constraint=constraint_name;
+  return v_state='23503' and v_constraint=p_constraint;
+end $$;
+create or replace function pg_temp.denied_by_trigger(p_sql text,p_message text) returns boolean language plpgsql as $$
+declare v_state text; v_message text;
+begin
+  execute p_sql;
+  return false;
+exception when others then
+  get stacked diagnostics v_state=returned_sqlstate,v_message=message_text;
+  return v_state='23514' and v_message=p_message;
+end $$;
 
 -- Every frozen relation must have an enabled, validated database control.
 select pg_temp.assert_true(count(*)=38,'all 38 tenant-aware FKs present and validated')
@@ -128,8 +146,23 @@ select pg_temp.assert_true(pg_temp.denied_integrity($q$insert into public.avalia
 
 begin;
 grant update on public.leads to service_role;
+grant insert on public.materiais_professor to service_role;
+grant select on public.leads,public.cursos,public.materiais_professor,public.turmas,public.disciplinas to service_role;
 set role service_role;
-select pg_temp.assert_true(pg_temp.denied_integrity($q$update public.leads set curso_id='cd000000-0000-0000-0000-000000000002' where id='d4000000-0000-0000-0000-000000000001'$q$),'CT-SERVICE-ROLE structural denial');
+select pg_temp.assert_true(current_user='service_role','CT-SERVICE-ROLE role actually assumed');
+select pg_temp.assert_true(has_table_privilege(current_user,'public.leads','UPDATE'),'CT-SERVICE-ROLE FK permission proven');
+select pg_temp.assert_true(has_table_privilege(current_user,'public.materiais_professor','INSERT'),'CT-SERVICE-ROLE trigger permission proven');
+select pg_temp.assert_true(not row_security_active('public.leads'::regclass),'CT-SERVICE-ROLE RLS bypass proven');
+select pg_temp.assert_true(exists(select 1 from public.leads l join public.cursos c on c.id='cd000000-0000-0000-0000-000000000002' where l.id='d4000000-0000-0000-0000-000000000001' and l.tenant_id is distinct from c.tenant_id),'CT-SERVICE-ROLE FK fixtures cross tenant');
+select pg_temp.assert_true(
+ pg_temp.denied_by_constraint($q$update public.leads set curso_id='cd000000-0000-0000-0000-000000000002' where id='d4000000-0000-0000-0000-000000000001'$q$,'leads_curso_tenant_fk_sc003'),
+ 'CT-SERVICE-ROLE exact composite FK denial');
+select pg_temp.assert_true((select curso_id='cd000000-0000-0000-0000-000000000001' from public.leads where id='d4000000-0000-0000-0000-000000000001'),'CT-SERVICE-ROLE rejected FK update unchanged');
+select pg_temp.assert_true(exists(select 1 from public.turmas t join public.disciplinas d on d.id='ce000000-0000-0000-0000-000000000003' where t.id='d1000000-0000-0000-0000-000000000001' and t.tenant_id=d.tenant_id and t.curso_id is distinct from d.curso_id),'CT-SERVICE-ROLE trigger fixtures semantic mismatch');
+select pg_temp.assert_true(
+ pg_temp.denied_by_trigger($q$insert into public.materiais_professor(tenant_id,turma_id,disciplina_id,professor_id,titulo) values('ca000000-0000-0000-0000-000000000001','d1000000-0000-0000-0000-000000000001','ce000000-0000-0000-0000-000000000003','cc000000-0000-0000-0000-000000000001','service role invalid')$q$,'SC003_R20_COURSE_MISMATCH'),
+ 'CT-SERVICE-ROLE exact semantic trigger denial');
+select pg_temp.assert_true(not exists(select 1 from public.materiais_professor where titulo='service role invalid'),'CT-SERVICE-ROLE rejected trigger insert absent');
 reset role;
 rollback;
 
