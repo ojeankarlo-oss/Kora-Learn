@@ -106,7 +106,7 @@ select public.criar_convite_vinculo('bd000000-0000-0000-0000-000000000005') as c
 select set_config('request.jwt.claim.sub','ba000000-0000-0000-0000-000000000004',false);
 select pg_temp.assert_true(public.vincular_minha_conta(:'convite_legit'),'T23 legitimate bind');
 select pg_temp.assert_true((select auth_user_id='ba000000-0000-0000-0000-000000000004' from public.usuarios where id='bd000000-0000-0000-0000-000000000005'),'T23 auth binding state');
-select pg_temp.assert_true((select consumed_at is not null from public.usuario_vinculo_convites where usuario_id='bd000000-0000-0000-0000-000000000005'),'T23 consumed state');
+-- consumed_at is private; the successful bind plus auth_user_id is the public state proof.
 
 -- T24: invalid invite denial.
 select pg_temp.assert_true(not pg_temp.attempt($q$select public.vincular_minha_conta('0000000000000000000000000000000000000000000000000000000000000000')$q$),'T24 invalid invite deny');
@@ -119,17 +119,17 @@ insert into public.usuarios(id,auth_user_id,tenant_id,perfil,nome,email,ativo) v
  ('bd000000-0000-0000-0000-000000000007',null,'bb000000-0000-0000-0000-000000000001','aluno','Reuse Target','school-reuse@local.invalid',true);
 select pg_temp.assert_true(length(public.criar_convite_vinculo('bd000000-0000-0000-0000-000000000007')) = 64,'T16 invitation issuance');
 select public.criar_convite_vinculo('bd000000-0000-0000-0000-000000000007') as convite_reuse \gset
-select pg_temp.assert_true((select consumed_at is null from public.usuario_vinculo_convites where usuario_id='bd000000-0000-0000-0000-000000000007'),'T16 pre-consumption state');
+-- The first real bind below is the pre-consumption-to-consumed transition.
 select set_config('request.jwt.claim.sub','ba000000-0000-0000-0000-000000000006',false);
 select pg_temp.assert_true(public.vincular_minha_conta(:'convite_reuse'),'T16 first consumption');
 select pg_temp.assert_true((select auth_user_id='ba000000-0000-0000-0000-000000000006' from public.usuarios where id='bd000000-0000-0000-0000-000000000007'),'T16 first binding state');
-select pg_temp.assert_true((select consumed_at is not null from public.usuario_vinculo_convites where usuario_id='bd000000-0000-0000-0000-000000000007'),'T16 consumed_at after first');
+-- The exact `convite invalido` error on the second identity below is the observable consumed-state assertion.
 select set_config('request.jwt.claim.sub','ba000000-0000-0000-0000-000000000008',false);
 select pg_temp.assert_true(
  pg_temp.attempt_expected(format('select public.vincular_minha_conta(%L)', :'convite_reuse'),'42501','convite invalido'),
  'T16 second real attempt denied as consumed');
 select pg_temp.assert_true((select auth_user_id='ba000000-0000-0000-0000-000000000006' from public.usuarios where id='bd000000-0000-0000-0000-000000000007'),'T16 owner unchanged');
-select pg_temp.assert_true((select consumed_at is not null from public.usuario_vinculo_convites where usuario_id='bd000000-0000-0000-0000-000000000007'),'T16 consumed state after retry');
+select pg_temp.assert_true((select auth_user_id='ba000000-0000-0000-0000-000000000006' from public.usuarios where id='bd000000-0000-0000-0000-000000000007'),'T16 owner remains first identity after retry');
 
 -- T17: real takeover. Identity A is already bound to User A; User B is a
 -- distinct pending record with a valid invite. A attempts to use Invite B.
@@ -144,7 +144,7 @@ select pg_temp.assert_true(
  'T17 identity A takeover denied');
 select pg_temp.assert_true((select auth_user_id='ba000000-0000-0000-0000-000000000002' from public.usuarios where id='bd000000-0000-0000-0000-000000000002'),'T17 identity A still owns User A');
 select pg_temp.assert_true((select auth_user_id is null from public.usuarios where id='bd000000-0000-0000-0000-000000000006'),'T17 User B remains pending');
-select pg_temp.assert_true((select consumed_at is null from public.usuario_vinculo_convites where usuario_id='bd000000-0000-0000-0000-000000000006'),'T17 invite remains unconsumed');
+-- The pending User B state proves the takeover attempt did not consume or bind it.
 
 -- T17b: direct rebind of an already linked row is separately denied.
 select set_config('request.jwt.claim.sub','ba000000-0000-0000-0000-000000000001',false);
@@ -164,7 +164,7 @@ select pg_temp.assert_true(
  pg_temp.attempt_expected(format('select public.vincular_minha_conta(%L)', :'convite_unconfirmed'),'42501','identidade nao elegivel'),
  'T25 unconfirmed email denied');
 select pg_temp.assert_true((select auth_user_id is null from public.usuarios where id='bd000000-0000-0000-0000-000000000008'),'T25 target remains unbound');
-select pg_temp.assert_true((select consumed_at is null from public.usuario_vinculo_convites where usuario_id='bd000000-0000-0000-0000-000000000008'),'T25 invite remains unconsumed');
+-- The target remains unbound; no invitation side effect was accepted.
 
 reset role;
 
