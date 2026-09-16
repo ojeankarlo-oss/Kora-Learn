@@ -92,7 +92,8 @@ export default function PrimeiroAcesso({ onLogged }) {
 
     setLoading(true);
     try {
-      const { vinculado, needsConfirmation } = await primeiroAcesso(email.trim(), senha);
+      const convite = new URLSearchParams(window.location.search).get("convite");
+      const { vinculado, needsConfirmation } = await primeiroAcesso(email.trim(), senha, convite);
       if (vinculado === true) {
         setInfo("Conta criada! Entrando...");
         if (onLogged) onLogged();

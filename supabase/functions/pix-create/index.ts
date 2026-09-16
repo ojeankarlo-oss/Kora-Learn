@@ -51,8 +51,9 @@ Deno.serve(async (req) => {
     });
     const { data: perfil, error: perfilError } = await admin
       .from("usuarios")
-      .select("id, auth_user_id, tenant_id, perfil, nome")
+      .select("id, auth_user_id, tenant_id, perfil, nome, ativo")
       .eq("auth_user_id", user.id)
+      .eq("ativo", true)
       .single();
     if (perfilError || !perfil) return json({ erro: "Perfil não encontrado" }, 403);
 

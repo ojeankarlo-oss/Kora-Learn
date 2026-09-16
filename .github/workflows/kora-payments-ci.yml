@@ -72,6 +72,12 @@ jobs:
       - name: Install PostgreSQL client
         run: sudo apt-get update && sudo apt-get install --yes postgresql-client
 
+      - name: Prepare disposable Auth confirmation schema
+        run: >-
+          psql -U supabase_admin -v ON_ERROR_STOP=1
+          -c "SET ROLE supabase_auth_admin;
+          ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS email_confirmed_at timestamptz;"
+
       - name: Bootstrap disposable Supabase compatibility schemas
         run: psql -v ON_ERROR_STOP=1 -f tests/payments/sql/bootstrap.sql
 
@@ -122,6 +128,9 @@ jobs:
       - name: Run PostgreSQL Customer API foundation invariants
         run: psql -v ON_ERROR_STOP=1 -f tests/payments/sql/p1_pay_api_customer_foundation_qa.sql
 
+      - name: Run School session authority negative tests
+        run: psql -v ON_ERROR_STOP=1 -f tests/school/sql/session_authority_qa.sql
+
       - name: Run webhook concurrency with two connections
         shell: bash
         run: bash tests/payments/sql/concurrency.sh
@@ -149,6 +158,15 @@ jobs:
 
       - name: Run Payments API foundation and contract tests
         run: npm run test:payments:contract
+
+      - name: Build application
+        run: npm run build
+
+      - name: Lint application
+        run: npm run lint
+
+      - name: Check UTF-8 encoding
+        run: npm run check:encoding
 
       - name: Deno check Payments Edge Functions
         run: |
