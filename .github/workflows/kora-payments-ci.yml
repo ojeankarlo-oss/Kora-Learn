@@ -131,6 +131,9 @@ jobs:
       - name: Run School session authority negative tests
         run: psql -v ON_ERROR_STOP=1 -f tests/school/sql/session_authority_qa.sql
 
+      - name: Run School cross-tenant academic integrity tests
+        run: psql -v ON_ERROR_STOP=1 -f tests/school/sql/cross_tenant_academic_integrity_qa.sql
+
       - name: Run webhook concurrency with two connections
         shell: bash
         run: bash tests/payments/sql/concurrency.sh
