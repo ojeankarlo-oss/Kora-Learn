@@ -128,6 +128,7 @@ select set_config('request.jwt.claim.sub','ba000000-0000-0000-0000-000000000008'
 select pg_temp.assert_true(
  pg_temp.attempt_expected(format('select public.vincular_minha_conta(%L)', :'convite_reuse'),'42501','convite invalido'),
  'T16 second real attempt denied as consumed');
+select set_config('request.jwt.claim.sub','ba000000-0000-0000-0000-000000000001',false);
 select pg_temp.assert_true((select auth_user_id='ba000000-0000-0000-0000-000000000006' from public.usuarios where id='bd000000-0000-0000-0000-000000000007'),'T16 owner unchanged');
 select pg_temp.assert_true((select auth_user_id='ba000000-0000-0000-0000-000000000006' from public.usuarios where id='bd000000-0000-0000-0000-000000000007'),'T16 owner remains first identity after retry');
 
@@ -142,6 +143,7 @@ select set_config('request.jwt.claim.sub','ba000000-0000-0000-0000-000000000002'
 select pg_temp.assert_true(
  pg_temp.attempt_expected(format('select public.vincular_minha_conta(%L)', :'convite_takeover'),'42501','identidade nao elegivel'),
  'T17 identity A takeover denied');
+select set_config('request.jwt.claim.sub','ba000000-0000-0000-0000-000000000001',false);
 select pg_temp.assert_true((select auth_user_id='ba000000-0000-0000-0000-000000000002' from public.usuarios where id='bd000000-0000-0000-0000-000000000002'),'T17 identity A still owns User A');
 select pg_temp.assert_true((select auth_user_id is null from public.usuarios where id='bd000000-0000-0000-0000-000000000006'),'T17 User B remains pending');
 -- The pending User B state proves the takeover attempt did not consume or bind it.
@@ -163,6 +165,7 @@ select set_config('request.jwt.claim.sub','ba000000-0000-0000-0000-000000000009'
 select pg_temp.assert_true(
  pg_temp.attempt_expected(format('select public.vincular_minha_conta(%L)', :'convite_unconfirmed'),'42501','identidade nao elegivel'),
  'T25 unconfirmed email denied');
+select set_config('request.jwt.claim.sub','ba000000-0000-0000-0000-000000000001',false);
 select pg_temp.assert_true((select auth_user_id is null from public.usuarios where id='bd000000-0000-0000-0000-000000000008'),'T25 target remains unbound');
 -- The target remains unbound; no invitation side effect was accepted.
 
