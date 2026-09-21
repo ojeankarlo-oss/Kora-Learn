@@ -81,6 +81,56 @@ jobs:
       - name: Bootstrap disposable Supabase compatibility schemas
         run: psql -v ON_ERROR_STOP=1 -f tests/payments/sql/bootstrap.sql
 
+      - name: Prove migration 040 fail-closed preflight on corrupted legacy data
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          createdb -U supabase_admin --template=kora_ci kora_sc003_corrupt
+          export PGDATABASE=kora_sc003_corrupt
+
+          for migration in $(find supabase/migrations -maxdepth 1 -type f ! -name '040_*' -print | sort); do
+            psql -v ON_ERROR_STOP=1 -f "$migration"
+          done
+
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          insert into public.tenants(id,nome,slug) values
+            ('ea000000-0000-0000-0000-000000000001','Preflight A','sc003-preflight-a'),
+            ('ea000000-0000-0000-0000-000000000002','Preflight B','sc003-preflight-b');
+          insert into public.cursos(id,tenant_id,nome) values
+            ('eb000000-0000-0000-0000-000000000001','ea000000-0000-0000-0000-000000000002','Course B');
+          insert into public.disciplinas(id,curso_id,tenant_id,nome) values
+            ('ec000000-0000-0000-0000-000000000001','eb000000-0000-0000-0000-000000000001','ea000000-0000-0000-0000-000000000001','Corrupt R01');
+          SQL
+
+          set +e
+          preflight_output=$(psql -v ON_ERROR_STOP=1 -f supabase/migrations/040_kora_school_cross_tenant_integrity.sql 2>&1)
+          preflight_status=$?
+          set -e
+          printf '%s\n' "$preflight_output"
+          if [[ $preflight_status -eq 0 ]]; then
+            echo 'SC003 PREFLIGHT FAIL: migration 040 unexpectedly succeeded'
+            exit 1
+          fi
+          if [[ "$preflight_output" != *'SC003-R01 TENANT_MISMATCH count=1'* ]]; then
+            echo 'SC003 PREFLIGHT FAIL: expected R01 tenant mismatch was not identified'
+            exit 1
+          fi
+
+          psql -v ON_ERROR_STOP=1 -At <<'SQL' | grep -Fx 'PRECHECK_UNCHANGED|1|ea000000-0000-0000-0000-000000000001|ea000000-0000-0000-0000-000000000002'
+          select 'PRECHECK_UNCHANGED',count(*),d.tenant_id,c.tenant_id
+          from public.disciplinas d join public.cursos c on c.id=d.curso_id
+          where d.id='ec000000-0000-0000-0000-000000000001'
+          group by d.tenant_id,c.tenant_id;
+          SQL
+          psql -v ON_ERROR_STOP=1 -At <<'SQL' | grep -Fx 'MIGRATION_040_NOT_APPLIED'
+          select case
+            when not exists(select 1 from information_schema.columns where table_schema='public' and table_name='avaliacao_questoes' and column_name='tenant_id')
+             and not exists(select 1 from pg_constraint where conname like '%\_sc003' escape '\')
+            then 'MIGRATION_040_NOT_APPLIED' else 'MIGRATION_040_PARTIALLY_APPLIED' end;
+          SQL
+          echo 'SC003 CORRUPTED LEGACY PREFLIGHT: PASS'
+
       - name: Validate and replay canonical migrations
         shell: bash
         run: |
@@ -130,6 +180,9 @@ jobs:
 
       - name: Run School session authority negative tests
         run: psql -v ON_ERROR_STOP=1 -f tests/school/sql/session_authority_qa.sql
+
+      - name: Run School cross-tenant academic integrity tests
+        run: psql -v ON_ERROR_STOP=1 -f tests/school/sql/cross_tenant_academic_integrity_qa.sql
 
       - name: Run webhook concurrency with two connections
         shell: bash
