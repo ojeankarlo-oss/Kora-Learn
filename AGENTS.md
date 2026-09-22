@@ -4,7 +4,7 @@
 
 - `main` is canonical. Verify its SHA before beginning a new roadmap slice.
 - Work on isolated feature or documentation branches. Do not make implementation commits directly to `main` or force-push it.
-- Changes reach `main` through reviewed pull requests.
+- Changes reach `main` through reviewed pull requests. Independent review is required before merge and may be performed by an authorized human reviewer **or** an independent audit agent that did not implement the change; when an audit agent is used, its review evidence must be recorded before merge. An implementer's own PASS is not sufficient. For security-sensitive changes: **implementer != final auditor**. A second GitHub account and a formal GitHub "Approved" review are not required when independent audit evidence is recorded.
 
 ## Merge and deployment awareness
 
