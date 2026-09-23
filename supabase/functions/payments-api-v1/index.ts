@@ -4,6 +4,42 @@ import { createPaymentsRepository } from "../../../src/lib/payments/supabase-rep
 import { PAYMENTS_API_METADATA, PAYMENTS_API_ROUTES } from "../../../src/lib/payments/api-contract.js";
 import { fingerprintHttpRequest } from "../../../src/lib/payments/fingerprint.js";
 
+/** @typedef {{
+ *   id: string,
+ *   external_reference: string,
+ *   created_at: string
+ * }} CustomerData */
+
+/** @typedef {{
+ *   data?: CustomerData,
+ *   error?: Error
+ * }} RpcResult */
+
+/** @typedef {{
+ *   data?: { id: string; lease_token: string },
+ *   error?: Error
+ * }} IdempotencyResult */
+
+/** @typedef {{
+ *   beginIdempotency: (input: { tenantId: string; applicationId: string; method: string; operation: string; key: string; fingerprint: string; requestId: string; leaseSeconds: number }) => Promise<IdempotencyResult>,
+ *   createCustomerAtomic: (input: { idempotencyRecordId: string; leaseToken: string; name: string; email: string | null; externalReference: string; requestId: string }) => Promise<RpcResult>,
+ *   findCredentialByHash: (hash: string) => Promise<any>,
+ *   findApplication: (applicationId: string, tenantId: string) => Promise<any>,
+ *   findTenant: (tenantId: string) => Promise<any>,
+ *   listCredentialScopes: (credentialId: string, tenantId: string) => Promise<any>,
+ *   auditAuthAttempt: (input: { credentialId: string | null; applicationId: string | null; tenantId: string | null; requestId: string; success: boolean; reason: string }) => Promise<void>,
+ *   touchCredential: (input: { credentialId: string; requestId: string }) => Promise<void>
+ * }} PaymentsRepository */
+
+/** @typedef {{
+ *   applicationId: string,
+ *   tenantId: string,
+ *   credentialId: string,
+ *   environment: string,
+ *   scopes: Set<string>,
+ *   requestId: string
+ * }} AuthContext */
+
 const VERSION = PAYMENTS_API_METADATA.version;
 const allowlist = (Deno.env.get("PAYMENTS_API_CORS_ORIGINS") || "")
   .split(",")
@@ -19,7 +55,7 @@ function routesFor() {
   return routes;
 }
 
-function createCustomerHandler(repository) {
+function createCustomerHandler(/** @type {PaymentsRepository} */ repository) {
   return async function handleCreateCustomer({ req, requestId, auth }) {
     // Validate Idempotency-Key header (required for financial mutations)
     const idempotencyKey = req.headers.get("idempotency-key");
@@ -140,7 +176,7 @@ function createCustomerHandler(repository) {
   };
 }
 
-function handlersFor(prefix: string, repository) {
+function handlersFor(prefix, /** @type {PaymentsRepository} */ repository) {
   const handleCreateCustomer = createCustomerHandler(repository);
   return {
     [`${prefix}/health`]: {
