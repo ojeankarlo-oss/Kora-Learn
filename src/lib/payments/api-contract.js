@@ -5,6 +5,16 @@ export const PAYMENTS_API_ROUTES = Object.freeze({
   "/v1/health": Object.freeze({
     GET: Object.freeze({ access: "public", requestId: true, responses: [200, 405, 500], responseSchema: "HealthResponse" }),
   }),
+  "/v1/customers": Object.freeze({
+    POST: Object.freeze({
+      access: "protected",
+      scope: "customers:write",
+      rateLimit: true,
+      requestId: true,
+      responses: [200, 201, 400, 401, 403, 409, 429, 500],
+      responseSchema: "CustomerResponse",
+    }),
+  }),
 });
 
 export const PAYMENTS_API_METADATA = Object.freeze({

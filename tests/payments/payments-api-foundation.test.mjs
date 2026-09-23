@@ -225,7 +225,9 @@ test("OPTIONS só responde para rota conhecida e duplicate security headers falh
 test("registry exige access explícito e impede future routes públicas por omissão", () => {
   assert.equal(PAYMENTS_API_ROUTES["/v1"].GET.access, "public");
   assert.equal(PAYMENTS_API_ROUTES["/v1/health"].GET.access, "public");
-  assert.equal(FUTURE_FINANCIAL_PATHS.every((path) => !Object.hasOwn(PAYMENTS_API_ROUTES, path)), true);
+  // /v1/customers is now implemented (Gate 1); remaining future paths must not be in registry
+  const remainingFuturePaths = FUTURE_FINANCIAL_PATHS.filter((p) => p !== "/v1/customers");
+  assert.equal(remainingFuturePaths.every((path) => !Object.hasOwn(PAYMENTS_API_ROUTES, path)), true);
   const invalid = { "/v1/forgotten": { GET: { requestId: true, responses: [200], responseSchema: "HealthResponse" } } };
   assert.equal(validateRouteRegistry(invalid).ok, false);
   assert.equal(validateRouteRegistry({ "/v1/protected": { GET: { access: "protected", requestId: true, responses: [200], responseSchema: "HealthResponse" } } }).ok, true);

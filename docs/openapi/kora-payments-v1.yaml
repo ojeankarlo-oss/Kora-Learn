@@ -14,6 +14,8 @@ servers:
 tags:
   - name: Foundation
     description: Non-financial API foundation endpoints.
+  - name: Customers
+    description: Customer management endpoints.
 paths:
   /v1:
     get:
@@ -57,6 +59,53 @@ paths:
                 $ref: '#/components/schemas/HealthResponse'
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/customers:
+    post:
+      tags: [Customers]
+      operationId: createCustomer
+      summary: Create or resolve a customer
+      security:
+        - M2MBearer: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomerRequest'
+      responses:
+        '200':
+          description: Customer created or resolved (legacy success code)
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerResponse'
+        '201':
+          description: Customer created or resolved
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerResponse'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
 components:
@@ -174,6 +223,50 @@ components:
               const: foundation
         request_id:
           type: string
+    CustomerRequest:
+      type: object
+      additionalProperties: false
+      required: [name, external_reference]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 160
+          description: Customer full name.
+        email:
+          type: string
+          format: email
+          maxLength: 320
+          description: Customer email address.
+        external_reference:
+          type: string
+          minLength: 1
+          maxLength: 160
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$'
+          description: Consumer-provided correlation ID, scoped to tenant and application.
+    CustomerResponse:
+      type: object
+      additionalProperties: false
+      required: [data, request_id]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [id, external_reference, created_at]
+          properties:
+            id:
+              type: string
+              format: uuid
+              description: KORA Payments customer UUID.
+            external_reference:
+              type: string
+              description: Echo of the provided external_reference.
+            created_at:
+              type: string
+              format: date-time
+              description: Customer creation timestamp.
+        request_id:
+          type: string
   responses:
     MethodNotAllowed:
       description: Method not supported for this route.
@@ -183,6 +276,36 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
     InternalError:
       description: Internal error without implementation details.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InvalidRequest:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Invalid or missing M2M credential.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Insufficient scope for this operation.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Idempotency key conflict or duplicate resource.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    RateLimited:
+      description: Too many requests.
       content:
         application/json:
           schema:
