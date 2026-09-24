@@ -5,6 +5,17 @@ export const PAYMENTS_API_ROUTES = Object.freeze({
   "/v1/health": Object.freeze({
     GET: Object.freeze({ access: "public", requestId: true, responses: [200, 405, 500], responseSchema: "HealthResponse" }),
   }),
+  "/v1/customers": Object.freeze({
+    POST: Object.freeze({
+      access: "protected",
+      scope: "customers:write",
+      // Gate 1 decision: no runtime rate limiting; M2M auth, scope and idempotency bound this route.
+      rateLimit: false,
+      requestId: true,
+      responses: [201, 400, 401, 403, 409, 500, 503],
+      responseSchema: "CustomerResponse",
+    }),
+  }),
 });
 
 export const PAYMENTS_API_METADATA = Object.freeze({

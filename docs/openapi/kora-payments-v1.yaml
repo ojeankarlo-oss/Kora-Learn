@@ -3,8 +3,9 @@ info:
   title: KORA Payments API
   version: 1.0.0
   description: >-
-    Versioned HTTP foundation for KORA Payments. This contract intentionally
-    exposes no financial mutation endpoint in this phase.
+    Versioned HTTP API for KORA Payments. Gate 1 exposes Customer creation
+    as its only mutation; no money-moving endpoint (invoices, payment intents,
+    payments, refunds) is exposed in this phase.
 servers:
   - url: https://{supabaseProject}.supabase.co/functions/v1/payments-api-v1
     variables:
@@ -14,6 +15,8 @@ servers:
 tags:
   - name: Foundation
     description: Non-financial API foundation endpoints.
+  - name: Customers
+    description: Customer management endpoints.
 paths:
   /v1:
     get:
@@ -59,6 +62,90 @@ paths:
           $ref: '#/components/responses/MethodNotAllowed'
         '500':
           $ref: '#/components/responses/InternalError'
+  /v1/customers:
+    post:
+      tags: [Customers]
+      operationId: createCustomer
+      summary: Create a customer
+      description: >-
+        Requires an M2M credential with the `customers:write` scope. The tenant
+        and application are derived from the credential; tenant identifiers in
+        the body, query string or `X-Tenant-Id` headers are rejected with 400.
+        The operation is idempotent per tenant, application, method, operation
+        and `Idempotency-Key`. Retrying the same key with the same canonical
+        body replays the original outcome without creating another customer:
+        a created customer replays as 201 with the same `data`, and a recorded
+        deterministic failure (400 or 409) replays the same error. Replayed
+        responses carry the current request's `request_id`. Reusing a key with a
+        different body returns 409. This operation is not rate limited in Gate 1.
+      security:
+        - M2MBearer: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomerRequest'
+      responses:
+        '201':
+          description: Customer created, or the original creation replayed for the same Idempotency-Key and body.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerResponse'
+        '400':
+          description: >-
+            Invalid or missing Idempotency-Key, invalid JSON or body fields,
+            caller-supplied tenant authority, or an application without an
+            active billing account (the latter is recorded and replayed for the same key).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: >-
+            `conflict`. The Idempotency-Key was reused with a different body; the
+            `external_reference` already identifies a customer for this tenant and
+            application (recorded and replayed for the same key); or an equivalent
+            request with the same key is still in progress, in which case
+            `Retry-After` is returned.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: >-
+            `provider_unavailable`. A previous attempt with this Idempotency-Key
+            failed transiently and must not be retried before `Retry-After` seconds.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/XRequestId'
+            Retry-After:
+              $ref: '#/components/headers/RetryAfter'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 components:
   securitySchemes:
     M2MBearer:
@@ -83,8 +170,11 @@ components:
     IdempotencyKey:
       name: Idempotency-Key
       in: header
-      required: false
-      description: Required for future financial mutations; not used by foundation GET endpoints.
+      required: true
+      description: >-
+        Required on every mutation. Leading and trailing whitespace is trimmed
+        before validation; missing, empty or invalid keys return 400 before any
+        idempotency record is created.
       schema:
         type: string
         minLength: 1
@@ -97,6 +187,11 @@ components:
         type: string
         minLength: 1
         maxLength: 128
+    RetryAfter:
+      description: Seconds to wait before retrying the same request.
+      schema:
+        type: integer
+        minimum: 1
   schemas:
     Error:
       type: object
@@ -174,6 +269,54 @@ components:
               const: foundation
         request_id:
           type: string
+    CustomerRequest:
+      type: object
+      additionalProperties: false
+      required: [name, external_reference]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 160
+          description: Customer full name. Trimmed; must not be blank.
+        email:
+          type: [string, 'null']
+          maxLength: 320
+          description: >-
+            Optional customer email address. Omitted, null or blank values are
+            stored as null. The value is trimmed and limited to 320 characters;
+            its format is not validated in this phase.
+        external_reference:
+          type: string
+          minLength: 1
+          maxLength: 160
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$'
+          description: >-
+            Consumer-provided correlation ID, unique per tenant and application.
+            Leading and trailing whitespace is trimmed before validation.
+    CustomerResponse:
+      type: object
+      additionalProperties: false
+      required: [data, request_id]
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          required: [id, external_reference, created_at]
+          properties:
+            id:
+              type: string
+              format: uuid
+              description: KORA Payments customer UUID.
+            external_reference:
+              type: string
+              description: Echo of the provided external_reference.
+            created_at:
+              type: string
+              format: date-time
+              description: Customer creation timestamp.
+        request_id:
+          type: string
   responses:
     MethodNotAllowed:
       description: Method not supported for this route.
@@ -183,6 +326,24 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
     InternalError:
       description: Internal error without implementation details.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InvalidRequest:
+      description: Request validation failed.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Invalid or missing M2M credential.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Insufficient scope for this operation.
       content:
         application/json:
           schema:

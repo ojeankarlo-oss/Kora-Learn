@@ -42,7 +42,7 @@ export function corsHeaders(req, allowlist = []) {
   return {
     ...(origin ? { "Access-Control-Allow-Origin": origin, Vary: "Origin" } : {}),
     "Access-Control-Allow-Headers": "authorization, content-type, idempotency-key, x-request-id",
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Expose-Headers": "X-Request-Id, Retry-After, X-RateLimit-Remaining",
   };
 }
@@ -174,7 +174,7 @@ export function validateRouteRegistry(routes) {
         return { ok: false, code: "invalid_route_registry", message: "Route access must be public or protected" };
       }
       if (definition.requestId !== true) return { ok: false, code: "invalid_route_registry", message: "Route request_id declaration missing" };
-      if (!Array.isArray(definition.responses) || !definition.responses.includes(200)) {
+      if (!Array.isArray(definition.responses) || !definition.responses.some(/** @param {number} status */ (status) => status >= 200 && status < 300)) {
         return { ok: false, code: "invalid_route_registry", message: "Route response contract missing" };
       }
       if (typeof definition.responseSchema !== "string" || !definition.responseSchema) {

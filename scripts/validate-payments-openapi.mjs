@@ -33,6 +33,11 @@ function responseSchemaRef(spec, response) {
   return resolvedResponse?.content?.["application/json"]?.schema?.$ref || null;
 }
 
+// Paths that have been implemented in the current phase (Gate 1 = customers)
+const IMPLEMENTED_FINANCIAL_PATHS = Object.freeze([
+  "/v1/customers",
+]);
+
 export function validatePaymentsOpenApi(spec, routes = PAYMENTS_API_ROUTES) {
   assert(spec && spec.openapi === "3.1.0", "openapi must be 3.1.0");
   assert(spec.info?.version === "1.0.0", "metadata version missing");
@@ -47,6 +52,7 @@ export function validatePaymentsOpenApi(spec, routes = PAYMENTS_API_ROUTES) {
 
   const specPaths = Object.keys(spec.paths || {});
   for (const forbidden of FUTURE_FINANCIAL_PATHS) {
+    if (IMPLEMENTED_FINANCIAL_PATHS.includes(forbidden)) continue;
     assert(!specPaths.includes(forbidden), `financial path must not be implemented: ${forbidden}`);
   }
 
@@ -66,7 +72,10 @@ export function validatePaymentsOpenApi(spec, routes = PAYMENTS_API_ROUTES) {
       for (const status of definition.responses) {
         assert(Object.hasOwn(operation.responses || {}, String(status)), `status ${status} missing ${method} ${path}`);
       }
-      assert(responseSchemaRef(spec, operation.responses?.["200"]) === `#/components/schemas/${definition.responseSchema}`, `success schema drift ${method} ${path}`);
+      // Find the first success status (2xx) in the responses
+      const successStatus = definition.responses.find((status) => status >= 200 && status < 300);
+      assert(successStatus, `no success status in responses ${method} ${path}`);
+      assert(responseSchemaRef(spec, operation.responses?.[String(successStatus)]) === `#/components/schemas/${definition.responseSchema}`, `success schema drift ${method} ${path}`);
       for (const [status, response] of Object.entries(operation.responses || {})) {
         if (status.startsWith("4") || status.startsWith("5")) {
           assert(responseSchemaRef(spec, response) === "#/components/schemas/ErrorResponse", `error schema drift ${status} ${method} ${path}`);
