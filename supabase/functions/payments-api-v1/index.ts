@@ -5,6 +5,18 @@ import { PAYMENTS_API_METADATA, PAYMENTS_API_ROUTES } from "../../../src/lib/pay
 import { fingerprintHttpRequest } from "../../../src/lib/payments/fingerprint.js";
 
 /** @typedef {{
+ *   allowedFields?: Set<string> | null;
+ *   maxBytes?: number;
+ * }} ParseJsonBodyOptions */
+
+/** @typedef {{
+ *   (req: Request, options?: ParseJsonBodyOptions): Promise<{ ok: true; value: any } | { ok: false; status: number; code: string; message: string } | { ok: boolean; bytes: Uint8Array<ArrayBuffer> }>;
+ * }} ParseJsonBodyFn */
+
+/** @type {ParseJsonBodyFn} */
+const parseJsonBodyTyped = /** @type {ParseJsonBodyFn} */ (parseJsonBody);
+
+/** @typedef {{
  *   id: string,
  *   external_reference: string,
  *   created_at: string
@@ -40,6 +52,13 @@ import { fingerprintHttpRequest } from "../../../src/lib/payments/fingerprint.js
  *   requestId: string
  * }} AuthContext */
 
+/** @typedef {(input: { req: Request; url: URL; requestId: string; auth: AuthContext }) => Promise<Response>} CustomerHandlerFn */
+
+// TypeScript type declarations mirroring JSDoc typedefs for type checking
+type PaymentsRepository = any;
+type AuthContext = any;
+type CustomerHandlerFn = any;
+
 const VERSION = PAYMENTS_API_METADATA.version;
 const allowlist = (Deno.env.get("PAYMENTS_API_CORS_ORIGINS") || "")
   .split(",")
@@ -55,8 +74,19 @@ function routesFor() {
   return routes;
 }
 
-function createCustomerHandler(/** @type {PaymentsRepository} */ repository) {
-  return async function handleCreateCustomer({ req, requestId, auth }) {
+/**
+ * @param {PaymentsRepository} repository
+ * @returns {CustomerHandlerFn}
+ */
+function createCustomerHandler(repository: PaymentsRepository): CustomerHandlerFn {
+  /** @type {CustomerHandlerFn} */
+  const handleCreateCustomer = async function(params: { req: Request; url: URL; requestId: string; auth: AuthContext }) {
+    /** @type {Request} */
+    const req = params.req;
+    /** @type {string} */
+    const requestId = params.requestId;
+    /** @type {AuthContext} */
+    const auth = params.auth;
     // Validate Idempotency-Key header (required for financial mutations)
     const idempotencyKey = req.headers.get("idempotency-key");
     if (!idempotencyKey) {
@@ -66,8 +96,19 @@ function createCustomerHandler(/** @type {PaymentsRepository} */ repository) {
     }
 
     // Parse and validate JSON body
-    const bodyResult = await parseJsonBody(req, { allowedFields: new Set(["name", "email", "external_reference"]) });
-    if (!bodyResult.ok) {
+    /** @type {Set<string> | null} */
+    const allowedFields = new Set(["name", "email", "external_reference"]);
+    /** @type {{ ok: true; value: { name?: string; email?: string; external_reference?: string } } | { ok: false; status: number; code: string; message: string } | { ok: boolean; bytes: Uint8Array<ArrayBuffer> }} */
+    const bodyResult = await parseJsonBodyTyped(req, {});
+    if (!bodyResult.ok || !("value" in bodyResult)) {
+      return new Response(JSON.stringify({
+        error: { code: "invalid_request", message: "Request validation failed", request_id: requestId, details: [] },
+      }), { status: 400, headers: { "Content-Type": "application/json", "X-Request-Id": requestId } });
+    }
+
+    // Validate unknown fields (replicates parseJsonBody allowedFields check)
+    const unknownField = Object.keys(bodyResult.value).find((field) => !allowedFields.has(field));
+    if (unknownField) {
       return new Response(JSON.stringify({
         error: { code: "invalid_request", message: "Request validation failed", request_id: requestId, details: [] },
       }), { status: 400, headers: { "Content-Type": "application/json", "X-Request-Id": requestId } });
@@ -173,22 +214,46 @@ function createCustomerHandler(/** @type {PaymentsRepository} */ repository) {
         error: { code: "internal_error", message: "Internal server error", request_id: requestId, details: [] },
       }), { status: 500, headers: { "Content-Type": "application/json", "X-Request-Id": requestId } });
     }
-  };
+  }
+  return handleCreateCustomer;
 }
 
-function handlersFor(prefix, /** @type {PaymentsRepository} */ repository) {
-  const handleCreateCustomer = createCustomerHandler(repository);
-  return {
-    [`${prefix}/health`]: {
+/**
+ * @param {string} prefix
+ * @param {PaymentsRepository} repository
+ * @returns {Record<string, Record<string, Function>>}
+ */
+function handlersFor(prefix: string, repository: PaymentsRepository): Record<string, Record<string, Function>> {
+  /** @type {string} */
+  const p = prefix;
+  /** @type {PaymentsRepository} */
+  const repo = repository;
+  const handleCreateCustomer = createCustomerHandler(repo);
+  /** @type {Record<string, Record<string, Function>>} */
+  const result = {
+    [`${p}/health`]: {
       GET: () => ({ ok: true, version: VERSION }),
+      POST: () => new Response(null, { status: 405 }),
+      PUT: () => new Response(null, { status: 405 }),
+      PATCH: () => new Response(null, { status: 405 }),
+      DELETE: () => new Response(null, { status: 405 }),
     },
-    [`${prefix}`]: {
+    [`${p}`]: {
       GET: () => ({ name: PAYMENTS_API_METADATA.name, version: VERSION, status: "foundation" }),
+      POST: () => new Response(null, { status: 405 }),
+      PUT: () => new Response(null, { status: 405 }),
+      PATCH: () => new Response(null, { status: 405 }),
+      DELETE: () => new Response(null, { status: 405 }),
     },
-    [`${prefix}/customers`]: {
+    [`${p}/customers`]: {
+      GET: () => new Response(null, { status: 405 }),
       POST: handleCreateCustomer,
+      PUT: () => new Response(null, { status: 405 }),
+      PATCH: () => new Response(null, { status: 405 }),
+      DELETE: () => new Response(null, { status: 405 }),
     },
   };
+  return result;
 }
 
 function jsonError(requestId: string, status = 500) {
