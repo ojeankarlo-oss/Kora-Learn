@@ -9,9 +9,10 @@ export const PAYMENTS_API_ROUTES = Object.freeze({
     POST: Object.freeze({
       access: "protected",
       scope: "customers:write",
-      rateLimit: true,
+      // Gate 1 decision: no runtime rate limiting; M2M auth, scope and idempotency bound this route.
+      rateLimit: false,
       requestId: true,
-      responses: [200, 201, 400, 401, 403, 409, 429, 500],
+      responses: [201, 400, 401, 403, 409, 500, 503],
       responseSchema: "CustomerResponse",
     }),
   }),

@@ -82,5 +82,22 @@ export function createPaymentsRepository(admin) {
       if (error) throw error;
       return data;
     },
+    /**
+     * @param {{recordId: string, leaseToken: string, status: number, body: object, failureKind: "deterministic" | "transient", errorCode: string, requestId?: string | null, retryAfterSeconds?: number}} input
+     */
+    async failIdempotency({ recordId, leaseToken, status, body, failureKind, errorCode, requestId, retryAfterSeconds }) {
+      const { data, error } = await admin.rpc("payment_api_fail_idempotency", {
+        p_record_id: recordId,
+        p_lease_token: leaseToken,
+        p_response_status: status,
+        p_response_body: body,
+        p_failure_kind: failureKind,
+        p_error_code: errorCode,
+        p_request_id: requestId ?? null,
+        p_retry_after_seconds: retryAfterSeconds ?? 0,
+      });
+      if (error) throw error;
+      return data;
+    },
   };
 }

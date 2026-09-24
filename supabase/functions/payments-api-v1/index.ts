@@ -1,259 +1,13 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { assertValidRouteRegistry, runPaymentsPipeline, sanitizeRequestId, parseJsonBody } from "../../../src/lib/payments/http.js";
+import { sanitizeRequestId } from "../../../src/lib/payments/http.js";
 import { createPaymentsRepository } from "../../../src/lib/payments/supabase-repository.js";
-import { PAYMENTS_API_METADATA, PAYMENTS_API_ROUTES } from "../../../src/lib/payments/api-contract.js";
-import { fingerprintHttpRequest } from "../../../src/lib/payments/fingerprint.js";
+import { createPaymentsApi } from "../../../src/lib/payments/api-runtime.js";
 
-/** @typedef {{
- *   allowedFields?: Set<string> | null;
- *   maxBytes?: number;
- * }} ParseJsonBodyOptions */
-
-/** @typedef {{
- *   (req: Request, options?: ParseJsonBodyOptions): Promise<{ ok: true; value: any } | { ok: false; status: number; code: string; message: string } | { ok: boolean; bytes: Uint8Array<ArrayBuffer> }>;
- * }} ParseJsonBodyFn */
-
-/** @type {ParseJsonBodyFn} */
-const parseJsonBodyTyped = /** @type {ParseJsonBodyFn} */ (parseJsonBody);
-
-/** @typedef {{
- *   id: string,
- *   external_reference: string,
- *   created_at: string
- * }} CustomerData */
-
-/** @typedef {{
- *   data?: CustomerData,
- *   error?: Error
- * }} RpcResult */
-
-/** @typedef {{
- *   data?: { id: string; lease_token: string },
- *   error?: Error
- * }} IdempotencyResult */
-
-/** @typedef {{
- *   beginIdempotency: (input: { tenantId: string; applicationId: string; method: string; operation: string; key: string; fingerprint: string; requestId: string; leaseSeconds: number }) => Promise<IdempotencyResult>,
- *   createCustomerAtomic: (input: { idempotencyRecordId: string; leaseToken: string; name: string; email: string | null; externalReference: string; requestId: string }) => Promise<RpcResult>,
- *   findCredentialByHash: (hash: string) => Promise<any>,
- *   findApplication: (applicationId: string, tenantId: string) => Promise<any>,
- *   findTenant: (tenantId: string) => Promise<any>,
- *   listCredentialScopes: (credentialId: string, tenantId: string) => Promise<any>,
- *   auditAuthAttempt: (input: { credentialId: string | null; applicationId: string | null; tenantId: string | null; requestId: string; success: boolean; reason: string }) => Promise<void>,
- *   touchCredential: (input: { credentialId: string; requestId: string }) => Promise<void>
- * }} PaymentsRepository */
-
-/** @typedef {{
- *   applicationId: string,
- *   tenantId: string,
- *   credentialId: string,
- *   environment: string,
- *   scopes: Set<string>,
- *   requestId: string
- * }} AuthContext */
-
-/** @typedef {(input: { req: Request; url: URL; requestId: string; auth: AuthContext }) => Promise<Response>} CustomerHandlerFn */
-
-// TypeScript type declarations mirroring JSDoc typedefs for type checking
-type PaymentsRepository = any;
-type AuthContext = any;
-type CustomerHandlerFn = any;
-
-const VERSION = PAYMENTS_API_METADATA.version;
 const allowlist = (Deno.env.get("PAYMENTS_API_CORS_ORIGINS") || "")
-  .split(",")
-  .map((value) => value.trim())
-  .filter(Boolean);
-const routes = assertValidRouteRegistry(PAYMENTS_API_ROUTES);
+  .split(",").map((value) => value.trim()).filter(Boolean);
 
 function logEvent(event: string, fields: Record<string, unknown> = {}) {
   console.log(JSON.stringify({ service: "payments-api-v1", event, ...fields }));
-}
-
-function routesFor() {
-  return routes;
-}
-
-/**
- * @param {PaymentsRepository} repository
- * @returns {CustomerHandlerFn}
- */
-function createCustomerHandler(repository: PaymentsRepository): CustomerHandlerFn {
-  /** @type {CustomerHandlerFn} */
-  const handleCreateCustomer = async function(params: { req: Request; url: URL; requestId: string; auth: AuthContext }) {
-    /** @type {Request} */
-    const req = params.req;
-    /** @type {string} */
-    const requestId = params.requestId;
-    /** @type {AuthContext} */
-    const auth = params.auth;
-    // Validate Idempotency-Key header (required for financial mutations)
-    const idempotencyKey = req.headers.get("idempotency-key");
-    if (!idempotencyKey) {
-      return new Response(JSON.stringify({
-        error: { code: "invalid_request", message: "Idempotency-Key header is required", request_id: requestId, details: [] },
-      }), { status: 400, headers: { "Content-Type": "application/json", "X-Request-Id": requestId } });
-    }
-
-    // Parse and validate JSON body
-    /** @type {Set<string> | null} */
-    const allowedFields = new Set(["name", "email", "external_reference"]);
-    /** @type {{ ok: true; value: { name?: string; email?: string; external_reference?: string } } | { ok: false; status: number; code: string; message: string } | { ok: boolean; bytes: Uint8Array<ArrayBuffer> }} */
-    const bodyResult = await parseJsonBodyTyped(req, {});
-    if (!bodyResult.ok || !("value" in bodyResult)) {
-      return new Response(JSON.stringify({
-        error: { code: "invalid_request", message: "Request validation failed", request_id: requestId, details: [] },
-      }), { status: 400, headers: { "Content-Type": "application/json", "X-Request-Id": requestId } });
-    }
-
-    // Validate unknown fields (replicates parseJsonBody allowedFields check)
-    const unknownField = Object.keys(bodyResult.value).find((field) => !allowedFields.has(field));
-    if (unknownField) {
-      return new Response(JSON.stringify({
-        error: { code: "invalid_request", message: "Request validation failed", request_id: requestId, details: [] },
-      }), { status: 400, headers: { "Content-Type": "application/json", "X-Request-Id": requestId } });
-    }
-
-    const { name, email, external_reference } = bodyResult.value;
-
-    // Validate required fields
-    if (!name || typeof name !== "string" || name.trim().length === 0 || name.trim().length > 160) {
-      return new Response(JSON.stringify({
-        error: { code: "invalid_request", message: "Invalid name", request_id: requestId, details: [] },
-      }), { status: 400, headers: { "Content-Type": "application/json", "X-Request-Id": requestId } });
-    }
-
-    if (email !== undefined && email !== null) {
-      if (typeof email !== "string" || email.trim().length > 320) {
-        return new Response(JSON.stringify({
-          error: { code: "invalid_request", message: "Invalid email", request_id: requestId, details: [] },
-        }), { status: 400, headers: { "Content-Type": "application/json", "X-Request-Id": requestId } });
-      }
-    }
-
-    if (!external_reference || typeof external_reference !== "string" || external_reference.trim().length === 0 || external_reference.trim().length > 160) {
-      return new Response(JSON.stringify({
-        error: { code: "invalid_request", message: "Invalid external_reference", request_id: requestId, details: [] },
-      }), { status: 400, headers: { "Content-Type": "application/json", "X-Request-Id": requestId } });
-    }
-
-    // Validate external_reference format
-    if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/.test(external_reference.trim())) {
-      return new Response(JSON.stringify({
-        error: { code: "invalid_request", message: "Invalid external_reference format", request_id: requestId, details: [] },
-      }), { status: 400, headers: { "Content-Type": "application/json", "X-Request-Id": requestId } });
-    }
-
-    // Compute request fingerprint for idempotency
-    const fingerprint = await fingerprintHttpRequest({
-      method: "POST",
-      operation: "POST /v1/customers",
-      body: bodyResult.value,
-    });
-
-    // Begin idempotency lease
-    const idempotencyResult = await repository.beginIdempotency({
-      tenantId: auth.tenantId,
-      applicationId: auth.applicationId,
-      method: "POST",
-      operation: "POST /v1/customers",
-      key: idempotencyKey,
-      fingerprint,
-      requestId,
-      leaseSeconds: 60,
-    });
-
-    const idempotencyRecord = idempotencyResult?.data;
-    if (!idempotencyRecord?.id || !idempotencyRecord?.lease_token) {
-      return new Response(JSON.stringify({
-        error: { code: "internal_error", message: "Failed to begin idempotency", request_id: requestId, details: [] },
-      }), { status: 500, headers: { "Content-Type": "application/json", "X-Request-Id": requestId } });
-    }
-
-    // Call the customer creation RPC
-    try {
-      const customerResult = await repository.createCustomerAtomic({
-        idempotencyRecordId: idempotencyRecord.id,
-        leaseToken: idempotencyRecord.lease_token,
-        name: name.trim(),
-        email: email?.trim() || null,
-        externalReference: external_reference.trim(),
-        requestId,
-      });
-
-      const customerData = customerResult?.data;
-      if (!customerData) {
-        return new Response(JSON.stringify({
-          error: { code: "internal_error", message: "Customer creation failed", request_id: requestId, details: [] },
-        }), { status: 500, headers: { "Content-Type": "application/json", "X-Request-Id": requestId } });
-      }
-
-      return new Response(JSON.stringify({
-        data: {
-          id: customerData.id,
-          external_reference: customerData.external_reference,
-          created_at: customerData.created_at,
-        },
-        request_id: requestId,
-      }), { status: 201, headers: { "Content-Type": "application/json", "X-Request-Id": requestId } });
-    } catch (error) {
-      // Check for specific error codes from the RPC
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      if (errorMessage.includes("customer idempotency lease invalid") || errorMessage.includes("conflict")) {
-        return new Response(JSON.stringify({
-          error: { code: "conflict", message: "Idempotency conflict", request_id: requestId, details: [] },
-        }), { status: 409, headers: { "Content-Type": "application/json", "X-Request-Id": requestId } });
-      }
-      if (errorMessage.includes("application billing account unavailable")) {
-        return new Response(JSON.stringify({
-          error: { code: "invalid_request", message: "Application not configured for billing", request_id: requestId, details: [] },
-        }), { status: 400, headers: { "Content-Type": "application/json", "X-Request-Id": requestId } });
-      }
-      // Generic error
-      return new Response(JSON.stringify({
-        error: { code: "internal_error", message: "Internal server error", request_id: requestId, details: [] },
-      }), { status: 500, headers: { "Content-Type": "application/json", "X-Request-Id": requestId } });
-    }
-  }
-  return handleCreateCustomer;
-}
-
-/**
- * @param {string} prefix
- * @param {PaymentsRepository} repository
- * @returns {Record<string, Record<string, Function>>}
- */
-function handlersFor(prefix: string, repository: PaymentsRepository): Record<string, Record<string, Function>> {
-  /** @type {string} */
-  const p = prefix;
-  /** @type {PaymentsRepository} */
-  const repo = repository;
-  const handleCreateCustomer = createCustomerHandler(repo);
-  /** @type {Record<string, Record<string, Function>>} */
-  const result = {
-    [`${p}/health`]: {
-      GET: () => ({ ok: true, version: VERSION }),
-      POST: () => new Response(null, { status: 405 }),
-      PUT: () => new Response(null, { status: 405 }),
-      PATCH: () => new Response(null, { status: 405 }),
-      DELETE: () => new Response(null, { status: 405 }),
-    },
-    [`${p}`]: {
-      GET: () => ({ name: PAYMENTS_API_METADATA.name, version: VERSION, status: "foundation" }),
-      POST: () => new Response(null, { status: 405 }),
-      PUT: () => new Response(null, { status: 405 }),
-      PATCH: () => new Response(null, { status: 405 }),
-      DELETE: () => new Response(null, { status: 405 }),
-    },
-    [`${p}/customers`]: {
-      GET: () => new Response(null, { status: 405 }),
-      POST: handleCreateCustomer,
-      PUT: () => new Response(null, { status: 405 }),
-      PATCH: () => new Response(null, { status: 405 }),
-      DELETE: () => new Response(null, { status: 405 }),
-    },
-  };
-  return result;
 }
 
 function jsonError(requestId: string, status = 500) {
@@ -273,7 +27,6 @@ Deno.serve(async (req) => {
     const routedUrl = new URL(req.url);
     routedUrl.pathname = publicPath;
     const routedRequest = new Request(routedUrl, req);
-    const prefix = "/v1";
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     if (!supabaseUrl || !serviceRoleKey) {
@@ -284,12 +37,7 @@ Deno.serve(async (req) => {
       auth: { persistSession: false, autoRefreshToken: false },
     });
     const repository = createPaymentsRepository(admin);
-    const response = await runPaymentsPipeline(routedRequest, {
-      routes: routesFor(),
-      handlers: handlersFor(prefix, repository),
-      repository,
-      allowlist,
-    });
+    const response = await createPaymentsApi({ repository, allowlist })(routedRequest);
     logEvent("request_completed", { request_id: requestId, method: req.method, path: incomingUrl.pathname, status: response.status });
     return response;
   } catch {
