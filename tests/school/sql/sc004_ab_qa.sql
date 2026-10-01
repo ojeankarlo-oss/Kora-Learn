@@ -107,6 +107,135 @@ begin
   perform pg_temp.qa_record(p_id,p_expected,v_observed,p_classification,'','',p_detail || ' sqlstate=' || v_state || ' message=' || v_message);
 end $$;
 
+-- Blocking actor probes. These helpers capture state as the database owner,
+-- execute the protected operation as an authenticated QA identity, and force
+-- every successful mutation back through a subtransaction before comparing
+-- owner-visible state before/after.
+create or replace function pg_temp.qa_probe_actor_count(
+  p_id text, p_expected text, p_classification text, p_detail text,
+  p_actor_sub text, p_sql text, p_state_sql text
+) returns void language plpgsql as $$
+declare
+  v_count bigint := 0;
+  v_observed text := 'DENY';
+  v_before text;
+  v_after text;
+  v_state text := '';
+  v_message text := '';
+begin
+  reset role;
+  execute p_state_sql into v_before;
+  begin
+    set local role authenticated;
+    perform set_config('request.jwt.claim.sub',p_actor_sub,false);
+    execute p_sql into v_count;
+    v_observed := case when coalesce(v_count,0) > 0 then 'ALLOW' else 'DENY' end;
+  exception when others then
+    get stacked diagnostics v_state = returned_sqlstate, v_message = message_text;
+    v_observed := 'DENY';
+  end;
+  reset role;
+  execute p_state_sql into v_after;
+  if v_before is distinct from v_after then v_observed := 'STATE_CHANGED'; end if;
+  perform pg_temp.qa_record(p_id,p_expected,v_observed,p_classification,v_before,v_after,
+    p_detail || ' count=' || coalesce(v_count::text,'') || ' sqlstate=' || v_state || ' message=' || v_message);
+end $$;
+
+create or replace function pg_temp.qa_probe_actor_dml(
+  p_id text, p_expected text, p_classification text, p_detail text,
+  p_actor_sub text, p_sql text, p_state_sql text
+) returns void language plpgsql as $$
+declare
+  v_rows integer := 0;
+  v_observed text := 'DENY';
+  v_before text;
+  v_after text;
+  v_state text := '';
+  v_message text := '';
+begin
+  reset role;
+  execute p_state_sql into v_before;
+  begin
+    set local role authenticated;
+    perform set_config('request.jwt.claim.sub',p_actor_sub,false);
+    execute p_sql;
+    get diagnostics v_rows = row_count;
+    v_observed := case when v_rows > 0 then 'ALLOW' else 'DENY' end;
+    raise exception using message = '__QA_ROLLBACK__';
+  exception when others then
+    get stacked diagnostics v_state = returned_sqlstate, v_message = message_text;
+    if v_message <> '__QA_ROLLBACK__' then v_observed := 'DENY'; end if;
+  end;
+  reset role;
+  execute p_state_sql into v_after;
+  if v_before is distinct from v_after then v_observed := 'STATE_CHANGED'; end if;
+  perform pg_temp.qa_record(p_id,p_expected,v_observed,p_classification,v_before,v_after,
+    p_detail || ' rows=' || v_rows || ' sqlstate=' || v_state || ' message=' || v_message);
+end $$;
+
+create or replace function pg_temp.qa_probe_actor_rpc(
+  p_id text, p_expected text, p_classification text, p_detail text,
+  p_actor_sub text, p_setup_sql text, p_sql text, p_state_sql text
+) returns void language plpgsql as $$
+declare
+  v_json jsonb;
+  v_observed text := 'DENY';
+  v_before text;
+  v_after text;
+  v_state text := '';
+  v_message text := '';
+begin
+  reset role;
+  execute p_state_sql into v_before;
+  begin
+    if nullif(p_setup_sql,'') is not null then execute p_setup_sql; end if;
+    set local role authenticated;
+    perform set_config('request.jwt.claim.sub',p_actor_sub,false);
+    execute p_sql into v_json;
+    v_observed := 'ALLOW';
+    raise exception using message = '__QA_ROLLBACK__';
+  exception when others then
+    get stacked diagnostics v_state = returned_sqlstate, v_message = message_text;
+    if v_message <> '__QA_ROLLBACK__' then v_observed := 'DENY'; end if;
+  end;
+  reset role;
+  execute p_state_sql into v_after;
+  if v_before is distinct from v_after then v_observed := 'STATE_CHANGED'; end if;
+  perform pg_temp.qa_record(p_id,p_expected,v_observed,p_classification,v_before,v_after,
+    p_detail || ' sqlstate=' || v_state || ' message=' || v_message);
+end $$;
+
+create or replace function pg_temp.qa_probe_actor_rpc_no_gabarito(
+  p_id text, p_expected text, p_classification text, p_detail text,
+  p_actor_sub text, p_sql text, p_state_sql text
+) returns void language plpgsql as $$
+declare
+  v_json jsonb;
+  v_observed text := 'DENY';
+  v_before text;
+  v_after text;
+  v_state text := '';
+  v_message text := '';
+begin
+  reset role;
+  execute p_state_sql into v_before;
+  begin
+    set local role authenticated;
+    perform set_config('request.jwt.claim.sub',p_actor_sub,false);
+    execute p_sql into v_json;
+    v_observed := case when v_json ? 'gabarito_snapshot' then 'GABARITO_LEAK' else 'ALLOW_NO_GABARITO' end;
+    raise exception using message = '__QA_ROLLBACK__';
+  exception when others then
+    get stacked diagnostics v_state = returned_sqlstate, v_message = message_text;
+    if v_message <> '__QA_ROLLBACK__' then v_observed := 'DENY'; end if;
+  end;
+  reset role;
+  execute p_state_sql into v_after;
+  if v_before is distinct from v_after then v_observed := 'STATE_CHANGED'; end if;
+  perform pg_temp.qa_record(p_id,p_expected,v_observed,p_classification,v_before,v_after,
+    p_detail || ' sqlstate=' || v_state || ' message=' || v_message);
+end $$;
+
 -- Deterministic artificial identities and School A/B fixture. All IDs are QA-only.
 reset role;
 insert into auth.users(id,email,email_confirmed_at) values
@@ -119,7 +248,10 @@ insert into auth.users(id,email,email_confirmed_at) values
  ('a3000000-0000-0000-0000-000000000012','student-8a@sc004.invalid',now()),
  ('a3000000-0000-0000-0000-000000000013','student-a2@sc004.invalid',now()),
  ('a3000000-0000-0000-0000-000000000014','student-8a2@sc004.invalid',now()),
- ('b3000000-0000-0000-0000-000000000010','student-b@sc004.invalid',now());
+ ('b3000000-0000-0000-0000-000000000010','student-b@sc004.invalid',now()),
+ ('a3000000-0000-0000-0000-000000000004','teacher-a3@sc004.invalid',now()),
+ ('a3000000-0000-0000-0000-000000000005','teacher-exact-8a-math@sc004.invalid',now()),
+ ('b3000000-0000-0000-0000-000000000002','manager-b@sc004.invalid',now());
 
 insert into public.tenants(id,nome,slug,ativo) values
  ('a1000000-0000-0000-0000-000000000001','QA SC004 — School A','qa-sc004-school-a',true),
@@ -138,7 +270,10 @@ insert into public.usuarios(id,auth_user_id,tenant_id,unidade_id,perfil,nome,ema
  ('a4000000-0000-0000-0000-000000000012','a3000000-0000-0000-0000-000000000012','a1000000-0000-0000-0000-000000000001','a2000000-0000-0000-0000-000000000001','aluno','QA Student 8A','student-8a@sc004.invalid',true),
  ('a4000000-0000-0000-0000-000000000013','a3000000-0000-0000-0000-000000000013','a1000000-0000-0000-0000-000000000001','a2000000-0000-0000-0000-000000000002','aluno','QA Student A2','student-a2@sc004.invalid',true),
  ('a4000000-0000-0000-0000-000000000014','a3000000-0000-0000-0000-000000000014','a1000000-0000-0000-0000-000000000001','a2000000-0000-0000-0000-000000000001','aluno','QA Student 8A2','student-8a2@sc004.invalid',true),
- ('b4000000-0000-0000-0000-000000000010','b3000000-0000-0000-0000-000000000010','b1000000-0000-0000-0000-000000000001','b2000000-0000-0000-0000-000000000001','aluno','QA Student B','student-b@sc004.invalid',true);
+ ('b4000000-0000-0000-0000-000000000010','b3000000-0000-0000-0000-000000000010','b1000000-0000-0000-0000-000000000001','b2000000-0000-0000-0000-000000000001','aluno','QA Student B','student-b@sc004.invalid',true),
+ ('a4000000-0000-0000-0000-000000000004','a3000000-0000-0000-0000-000000000004','a1000000-0000-0000-0000-000000000001','a2000000-0000-0000-0000-000000000001','professor','QA Teacher A3 No Assignment','teacher-a3@sc004.invalid',true),
+ ('a4000000-0000-0000-0000-000000000005','a3000000-0000-0000-0000-000000000005','a1000000-0000-0000-0000-000000000001','a2000000-0000-0000-0000-000000000001','professor','QA Teacher Exact 8A Math','teacher-exact-8a-math@sc004.invalid',true),
+ ('b4000000-0000-0000-0000-000000000002','b3000000-0000-0000-0000-000000000002','b1000000-0000-0000-0000-000000000001','b2000000-0000-0000-0000-000000000001','gestor','QA Manager B','manager-b@sc004.invalid',true);
 
 insert into public.cursos(id,tenant_id,nome,ativo) values
  ('a5000000-0000-0000-0000-000000000001','a1000000-0000-0000-0000-000000000001','QA Middle School A',true),
@@ -154,6 +289,7 @@ insert into public.turmas(id,tenant_id,curso_id,unidade_id,nome,ativa) values
  ('a7000000-0000-0000-0000-000000000002','a1000000-0000-0000-0000-000000000001','a5000000-0000-0000-0000-000000000001','a2000000-0000-0000-0000-000000000001','QA Class 7B',true),
  ('a7000000-0000-0000-0000-000000000003','a1000000-0000-0000-0000-000000000001','a5000000-0000-0000-0000-000000000001','a2000000-0000-0000-0000-000000000001','QA Class 8A',true),
  ('a7000000-0000-0000-0000-000000000004','a1000000-0000-0000-0000-000000000001','a5000000-0000-0000-0000-000000000001','a2000000-0000-0000-0000-000000000002','QA Class A2',true),
+ ('a7000000-0000-0000-0000-000000000005','a1000000-0000-0000-0000-000000000001','a5000000-0000-0000-0000-000000000001','a2000000-0000-0000-0000-000000000002','QA Class 8B',true),
  ('b7000000-0000-0000-0000-000000000001','b1000000-0000-0000-0000-000000000001','b5000000-0000-0000-0000-000000000001','b2000000-0000-0000-0000-000000000001','QA Class B',true);
 insert into public.matriculas(id,tenant_id,usuario_id,curso_id,turma_id,unidade_id,situacao) values
  ('a8000000-0000-0000-0000-000000000001','a1000000-0000-0000-0000-000000000001','a4000000-0000-0000-0000-000000000010','a5000000-0000-0000-0000-000000000001','a7000000-0000-0000-0000-000000000001','a2000000-0000-0000-0000-000000000001','ativa'),
@@ -178,6 +314,7 @@ insert into public.atribuicoes_academicas_professor(id,tenant_id,professor_id,tu
  ('aa100000-0000-0000-0000-000000000002','a1000000-0000-0000-0000-000000000001','a4000000-0000-0000-0000-000000000002','a7000000-0000-0000-0000-000000000002','a6000000-0000-0000-0000-000000000001'),
  ('aa100000-0000-0000-0000-000000000003','a1000000-0000-0000-0000-000000000001','a4000000-0000-0000-0000-000000000002','a7000000-0000-0000-0000-000000000003','a6000000-0000-0000-0000-000000000001'),
  ('aa100000-0000-0000-0000-000000000004','a1000000-0000-0000-0000-000000000001','a4000000-0000-0000-0000-000000000002','a7000000-0000-0000-0000-000000000003','a6000000-0000-0000-0000-000000000002'),
+ ('aa100000-0000-0000-0000-000000000005','a1000000-0000-0000-0000-000000000001','a4000000-0000-0000-0000-000000000005','a7000000-0000-0000-0000-000000000003','a6000000-0000-0000-0000-000000000001'),
  ('bb100000-0000-0000-0000-000000000001','b1000000-0000-0000-0000-000000000001','b4000000-0000-0000-0000-000000000001','b7000000-0000-0000-0000-000000000001','b6000000-0000-0000-0000-000000000001');
 
 insert into public.questoes(id,tenant_id,disciplina_id,enunciado,alternativas,resposta_correta,criado_por) values
@@ -185,26 +322,34 @@ insert into public.questoes(id,tenant_id,disciplina_id,enunciado,alternativas,re
  ('aa000000-0000-0000-0000-000000000002','a1000000-0000-0000-0000-000000000001','a6000000-0000-0000-0000-000000000002','QA Physics question','[{"id":"a","texto":"A"}]','a','a4000000-0000-0000-0000-000000000002'),
  ('aa000000-0000-0000-0000-000000000003','a1000000-0000-0000-0000-000000000001','a6000000-0000-0000-0000-000000000003','QA Chemistry question','[{"id":"a","texto":"A"}]','a','a4000000-0000-0000-0000-000000000002'),
  ('aa000000-0000-0000-0000-000000000004','a1000000-0000-0000-0000-000000000001','a6000000-0000-0000-0000-000000000002','QA 7B Physics question','[{"id":"a","texto":"A"}]','a','a4000000-0000-0000-0000-000000000002'),
- ('bb000000-0000-0000-0000-000000000001','b1000000-0000-0000-0000-000000000001','b6000000-0000-0000-0000-000000000001','QA B Math question','[{"id":"a","texto":"A"}]','a','b4000000-0000-0000-0000-000000000001');
+ ('bb000000-0000-0000-0000-000000000001','b1000000-0000-0000-0000-000000000001','b6000000-0000-0000-0000-000000000001','QA B Math question','[{"id":"a","texto":"A"}]','a','b4000000-0000-0000-0000-000000000001'),
+ ('bb000000-0000-0000-0000-000000000002','b1000000-0000-0000-0000-000000000001','b6000000-0000-0000-0000-000000000001','QA extra B Math question','[{"id":"a","texto":"A"}]','a','b4000000-0000-0000-0000-000000000001');
 insert into public.avaliacoes(id,tenant_id,curso_id,disciplina_id,turma_id,titulo,situacao,criado_por) values
  ('ac000000-0000-0000-0000-000000000001','a1000000-0000-0000-0000-000000000001','a5000000-0000-0000-0000-000000000001','a6000000-0000-0000-0000-000000000001','a7000000-0000-0000-0000-000000000003','QA 8A Math','publicada','a4000000-0000-0000-0000-000000000002'),
  ('ac000000-0000-0000-0000-000000000002','a1000000-0000-0000-0000-000000000001','a5000000-0000-0000-0000-000000000001','a6000000-0000-0000-0000-000000000002','a7000000-0000-0000-0000-000000000003','QA 8A Physics','publicada','a4000000-0000-0000-0000-000000000002'),
  ('ac000000-0000-0000-0000-000000000003','a1000000-0000-0000-0000-000000000001','a5000000-0000-0000-0000-000000000001','a6000000-0000-0000-0000-000000000003','a7000000-0000-0000-0000-000000000003','QA 8A Chemistry','publicada','a4000000-0000-0000-0000-000000000002'),
  ('ac000000-0000-0000-0000-000000000004','a1000000-0000-0000-0000-000000000001','a5000000-0000-0000-0000-000000000001','a6000000-0000-0000-0000-000000000002','a7000000-0000-0000-0000-000000000001','QA 7A Physics','publicada','a4000000-0000-0000-0000-000000000002'),
- ('bc000000-0000-0000-0000-000000000001','b1000000-0000-0000-0000-000000000001','b5000000-0000-0000-0000-000000000001','b6000000-0000-0000-0000-000000000001','b7000000-0000-0000-0000-000000000001','QA B Math','publicada','b4000000-0000-0000-0000-000000000001');
+ ('bc000000-0000-0000-0000-000000000001','b1000000-0000-0000-0000-000000000001','b5000000-0000-0000-0000-000000000001','b6000000-0000-0000-0000-000000000001','b7000000-0000-0000-0000-000000000001','QA B Math','publicada','b4000000-0000-0000-0000-000000000001'),
+ ('bc000000-0000-0000-0000-000000000002','b1000000-0000-0000-0000-000000000001','b5000000-0000-0000-0000-000000000001','b6000000-0000-0000-0000-000000000001','b7000000-0000-0000-0000-000000000001','QA B Math Extra','rascunho','b4000000-0000-0000-0000-000000000001');
 insert into public.avaliacao_questoes(avaliacao_id,questao_id,ordem) values
  ('ac000000-0000-0000-0000-000000000001','aa000000-0000-0000-0000-000000000001',1),
  ('ac000000-0000-0000-0000-000000000002','aa000000-0000-0000-0000-000000000002',1),
  ('ac000000-0000-0000-0000-000000000003','aa000000-0000-0000-0000-000000000003',1),
  ('ac000000-0000-0000-0000-000000000004','aa000000-0000-0000-0000-000000000004',1),
  ('bc000000-0000-0000-0000-000000000001','bb000000-0000-0000-0000-000000000001',1);
+insert into public.avaliacao_questoes(avaliacao_id,questao_id,ordem) values
+ ('bc000000-0000-0000-0000-000000000002','bb000000-0000-0000-0000-000000000002',1);
 insert into public.avaliacao_tentativas(id,tenant_id,avaliacao_id,matricula_id,usuario_id,numero_tentativa,questoes_ordem,gabarito_snapshot) values
  ('ad000000-0000-0000-0000-000000000001','a1000000-0000-0000-0000-000000000001','ac000000-0000-0000-0000-000000000001','a8000000-0000-0000-0000-000000000003','a4000000-0000-0000-0000-000000000012',1,'[{"questao_id":"aa000000-0000-0000-0000-000000000001","pontos":1}]','{"aa000000-0000-0000-0000-000000000001":"a"}'),
  ('ad000000-0000-0000-0000-000000000002','a1000000-0000-0000-0000-000000000001','ac000000-0000-0000-0000-000000000002','a8000000-0000-0000-0000-000000000003','a4000000-0000-0000-0000-000000000012',1,'[{"questao_id":"aa000000-0000-0000-0000-000000000002","pontos":1}]','{"aa000000-0000-0000-0000-000000000002":"a"}'),
- ('ad000000-0000-0000-0000-000000000003','a1000000-0000-0000-0000-000000000001','ac000000-0000-0000-0000-000000000004','a8000000-0000-0000-0000-000000000001','a4000000-0000-0000-0000-000000000010',1,'[{"questao_id":"aa000000-0000-0000-0000-000000000004","pontos":1}]','{"aa000000-0000-0000-0000-000000000004":"a"}');
+ ('ad000000-0000-0000-0000-000000000003','a1000000-0000-0000-0000-000000000001','ac000000-0000-0000-0000-000000000004','a8000000-0000-0000-0000-000000000001','a4000000-0000-0000-0000-000000000010',1,'[{"questao_id":"aa000000-0000-0000-0000-000000000004","pontos":1}]','{"aa000000-0000-0000-0000-000000000004":"a"}'),
+ ('bd000000-0000-0000-0000-000000000001','b1000000-0000-0000-0000-000000000001','bc000000-0000-0000-0000-000000000001','b8000000-0000-0000-0000-000000000001','b4000000-0000-0000-0000-000000000010',77,'[{"questao_id":"bb000000-0000-0000-0000-000000000001","pontos":1}]','{"bb000000-0000-0000-0000-000000000001":"a"}'),
+ ('bd000000-0000-0000-0000-000000000002','b1000000-0000-0000-0000-000000000001','bc000000-0000-0000-0000-000000000002','b8000000-0000-0000-0000-000000000001','b4000000-0000-0000-0000-000000000010',78,'[{"questao_id":"bb000000-0000-0000-0000-000000000002","pontos":1}]','{"bb000000-0000-0000-0000-000000000002":"a"}');
 insert into public.avaliacao_respostas(id,tenant_id,tentativa_id,questao_id) values
+ ('ae000000-0000-0000-0000-000000000003','a1000000-0000-0000-0000-000000000001','ad000000-0000-0000-0000-000000000001','aa000000-0000-0000-0000-000000000001'),
  ('ae000000-0000-0000-0000-000000000001','a1000000-0000-0000-0000-000000000001','ad000000-0000-0000-0000-000000000002','aa000000-0000-0000-0000-000000000002'),
- ('ae000000-0000-0000-0000-000000000002','a1000000-0000-0000-0000-000000000001','ad000000-0000-0000-0000-000000000003','aa000000-0000-0000-0000-000000000004');
+ ('ae000000-0000-0000-0000-000000000002','a1000000-0000-0000-0000-000000000001','ad000000-0000-0000-0000-000000000003','aa000000-0000-0000-0000-000000000004'),
+ ('be000000-0000-0000-0000-000000000001','b1000000-0000-0000-0000-000000000001','bd000000-0000-0000-0000-000000000001','bb000000-0000-0000-0000-000000000001');
 insert into public.materiais_professor(id,tenant_id,turma_id,disciplina_id,professor_id,titulo,url) values
  ('af000000-0000-0000-0000-000000000001','a1000000-0000-0000-0000-000000000001','a7000000-0000-0000-0000-000000000003','a6000000-0000-0000-0000-000000000001','a4000000-0000-0000-0000-000000000002','QA material Math','https://qa.invalid/math'),
  ('af000000-0000-0000-0000-000000000002','a1000000-0000-0000-0000-000000000001','a7000000-0000-0000-0000-000000000003','a6000000-0000-0000-0000-000000000002','a4000000-0000-0000-0000-000000000002','QA material Physics','https://qa.invalid/physics'),
@@ -347,6 +492,93 @@ select pg_temp.qa_probe_dml('A44','DENY','CURRENT REPOSITORY CONTRACT','Attendan
 -- A45: authenticated Student A direct column read. This is the mandated verdict.
 select set_config('request.jwt.claim.sub','a3000000-0000-0000-0000-000000000012',false);
 select pg_temp.qa_probe_count('A45','DENY','CURRENT REPOSITORY CONTRACT','Student direct SELECT cannot retrieve gabarito_snapshot after column-level revoke','select count(*) from public.avaliacao_tentativas where id=''ad000000-0000-0000-0000-000000000001'' and gabarito_snapshot <> ''{}''::jsonb');
+
+-- R3-BLOCKER-A: staff cross-tenant reads on every affected policy surface.
+select pg_temp.qa_probe_actor_count('R3-SA-SEL-Q','DENY','BLOCKING CROSS-TENANT STAFF','Staff A cannot SELECT a Tenant B question','a3000000-0000-0000-0000-000000000001','select count(*) from public.questoes where id=''bb000000-0000-0000-0000-000000000001''','select count(*)::text from public.questoes where id=''bb000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_count('R3-SB-SEL-Q','DENY','BLOCKING CROSS-TENANT STAFF','Staff B cannot SELECT a Tenant A question','b3000000-0000-0000-0000-000000000002','select count(*) from public.questoes where id=''aa000000-0000-0000-0000-000000000001''','select count(*)::text from public.questoes where id=''aa000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_count('R3-SA-SEL-A','DENY','BLOCKING CROSS-TENANT STAFF','Staff A cannot SELECT a Tenant B assessment','a3000000-0000-0000-0000-000000000001','select count(*) from public.avaliacoes where id=''bc000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacoes where id=''bc000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_count('R3-SB-SEL-A','DENY','BLOCKING CROSS-TENANT STAFF','Staff B cannot SELECT a Tenant A assessment','b3000000-0000-0000-0000-000000000002','select count(*) from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_count('R3-SA-SEL-AQ','DENY','BLOCKING CROSS-TENANT STAFF','Staff A cannot SELECT a Tenant B assessment-question row','a3000000-0000-0000-0000-000000000001','select count(*) from public.avaliacao_questoes where avaliacao_id=''bc000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacao_questoes where avaliacao_id=''bc000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_count('R3-SB-SEL-AQ','DENY','BLOCKING CROSS-TENANT STAFF','Staff B cannot SELECT a Tenant A assessment-question row','b3000000-0000-0000-0000-000000000002','select count(*) from public.avaliacao_questoes where avaliacao_id=''ac000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacao_questoes where avaliacao_id=''ac000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_count('R3-SA-SEL-T','DENY','BLOCKING CROSS-TENANT STAFF','Staff A cannot SELECT a Tenant B attempt','a3000000-0000-0000-0000-000000000001','select count(*) from public.avaliacao_tentativas where id=''bd000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacao_tentativas where id=''bd000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_count('R3-SB-SEL-T','DENY','BLOCKING CROSS-TENANT STAFF','Staff B cannot SELECT a Tenant A attempt','b3000000-0000-0000-0000-000000000002','select count(*) from public.avaliacao_tentativas where id=''ad000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacao_tentativas where id=''ad000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_count('R3-SA-SEL-R','DENY','BLOCKING CROSS-TENANT STAFF','Staff A cannot SELECT a Tenant B response','a3000000-0000-0000-0000-000000000001','select count(*) from public.avaliacao_respostas where id=''be000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacao_respostas where id=''be000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_count('R3-SB-SEL-R','DENY','BLOCKING CROSS-TENANT STAFF','Staff B cannot SELECT a Tenant A response','b3000000-0000-0000-0000-000000000002','select count(*) from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000000003''','select count(*)::text from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000000003''');
+
+-- R3-BLOCKER-A: staff inserts, cross-tenant updates and deletes.
+select pg_temp.qa_probe_actor_dml('R3-SA-INS-Q','DENY','BLOCKING CROSS-TENANT STAFF','Staff A cannot INSERT a Tenant B question','a3000000-0000-0000-0000-000000000001','insert into public.questoes(id,tenant_id,disciplina_id,enunciado,alternativas,resposta_correta,criado_por) values (''ca300000-0000-0000-0000-000000000001'',''b1000000-0000-0000-0000-000000000001'',''b6000000-0000-0000-0000-000000000001'',''QA forbidden B question'',''[{"id":"a"}]'',''a'',''b4000000-0000-0000-0000-000000000001'')','select count(*)::text from public.questoes where id=''ca300000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R3-SB-INS-Q','DENY','BLOCKING CROSS-TENANT STAFF','Staff B cannot INSERT a Tenant A question','b3000000-0000-0000-0000-000000000002','insert into public.questoes(id,tenant_id,disciplina_id,enunciado,alternativas,resposta_correta,criado_por) values (''cb300000-0000-0000-0000-000000000001'',''a1000000-0000-0000-0000-000000000001'',''a6000000-0000-0000-0000-000000000001'',''QA forbidden A question'',''[{"id":"a"}]'',''a'',''a4000000-0000-0000-0000-000000000001'')','select count(*)::text from public.questoes where id=''cb300000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R3-SA-UPD-Q-XTENANT','DENY','BLOCKING CROSS-TENANT STAFF','Staff A cannot update an A question to Tenant B','a3000000-0000-0000-0000-000000000001','update public.questoes set tenant_id=''b1000000-0000-0000-0000-000000000001'' where id=''aa000000-0000-0000-0000-000000000001''','select tenant_id::text from public.questoes where id=''aa000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R3-SB-UPD-Q-XTENANT','DENY','BLOCKING CROSS-TENANT STAFF','Staff B cannot update a B question to Tenant A','b3000000-0000-0000-0000-000000000002','update public.questoes set tenant_id=''a1000000-0000-0000-0000-000000000001'' where id=''bb000000-0000-0000-0000-000000000001''','select tenant_id::text from public.questoes where id=''bb000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R3-SA-UPD-Q-ROW','DENY','BLOCKING CROSS-TENANT STAFF','Staff A cannot update a Tenant B question','a3000000-0000-0000-0000-000000000001','update public.questoes set enunciado=''QA forbidden edit'' where id=''bb000000-0000-0000-0000-000000000001''','select enunciado from public.questoes where id=''bb000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R3-SB-UPD-Q-ROW','DENY','BLOCKING CROSS-TENANT STAFF','Staff B cannot update a Tenant A question','b3000000-0000-0000-0000-000000000002','update public.questoes set enunciado=''QA forbidden edit'' where id=''aa000000-0000-0000-0000-000000000001''','select enunciado from public.questoes where id=''aa000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R3-SA-DEL-Q','DENY','BLOCKING CROSS-TENANT STAFF','Staff A cannot DELETE a Tenant B question','a3000000-0000-0000-0000-000000000001','delete from public.questoes where id=''bb000000-0000-0000-0000-000000000001''','select count(*)::text from public.questoes where id=''bb000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R3-SB-DEL-Q','DENY','BLOCKING CROSS-TENANT STAFF','Staff B cannot DELETE a Tenant A question','b3000000-0000-0000-0000-000000000002','delete from public.questoes where id=''aa000000-0000-0000-0000-000000000001''','select count(*)::text from public.questoes where id=''aa000000-0000-0000-0000-000000000001''');
+
+select pg_temp.qa_probe_actor_dml('R3-SA-INS-A','DENY','BLOCKING CROSS-TENANT STAFF','Staff A cannot INSERT a Tenant B assessment','a3000000-0000-0000-0000-000000000001','insert into public.avaliacoes(id,tenant_id,curso_id,disciplina_id,turma_id,titulo,situacao,criado_por) values (''ca300000-0000-0000-0000-000000000002'',''b1000000-0000-0000-0000-000000000001'',''b5000000-0000-0000-0000-000000000001'',''b6000000-0000-0000-0000-000000000001'',''b7000000-0000-0000-0000-000000000001'',''QA forbidden B assessment'',''rascunho'',''b4000000-0000-0000-0000-000000000001'')','select count(*)::text from public.avaliacoes where id=''ca300000-0000-0000-0000-000000000002''');
+select pg_temp.qa_probe_actor_dml('R3-SB-INS-A','DENY','BLOCKING CROSS-TENANT STAFF','Staff B cannot INSERT a Tenant A assessment','b3000000-0000-0000-0000-000000000002','insert into public.avaliacoes(id,tenant_id,curso_id,disciplina_id,turma_id,titulo,situacao,criado_por) values (''cb300000-0000-0000-0000-000000000002'',''a1000000-0000-0000-0000-000000000001'',''a5000000-0000-0000-0000-000000000001'',''a6000000-0000-0000-0000-000000000001'',''a7000000-0000-0000-0000-000000000003'',''QA forbidden A assessment'',''rascunho'',''a4000000-0000-0000-0000-000000000001'')','select count(*)::text from public.avaliacoes where id=''cb300000-0000-0000-0000-000000000002''');
+select pg_temp.qa_probe_actor_dml('R3-SA-UPD-A-XTENANT','DENY','BLOCKING CROSS-TENANT STAFF','Staff A cannot update an A assessment to Tenant B','a3000000-0000-0000-0000-000000000001','update public.avaliacoes set tenant_id=''b1000000-0000-0000-0000-000000000001'' where id=''ac000000-0000-0000-0000-000000000001''','select tenant_id::text from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R3-SB-UPD-A-XTENANT','DENY','BLOCKING CROSS-TENANT STAFF','Staff B cannot update a B assessment to Tenant A','b3000000-0000-0000-0000-000000000002','update public.avaliacoes set tenant_id=''a1000000-0000-0000-0000-000000000001'' where id=''bc000000-0000-0000-0000-000000000001''','select tenant_id::text from public.avaliacoes where id=''bc000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R3-SA-UPD-A-ROW','DENY','BLOCKING CROSS-TENANT STAFF','Staff A cannot update a Tenant B assessment','a3000000-0000-0000-0000-000000000001','update public.avaliacoes set titulo=''QA forbidden edit'' where id=''bc000000-0000-0000-0000-000000000001''','select titulo from public.avaliacoes where id=''bc000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R3-SB-UPD-A-ROW','DENY','BLOCKING CROSS-TENANT STAFF','Staff B cannot update a Tenant A assessment','b3000000-0000-0000-0000-000000000002','update public.avaliacoes set titulo=''QA forbidden edit'' where id=''ac000000-0000-0000-0000-000000000001''','select titulo from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R3-SA-DEL-A','DENY','BLOCKING CROSS-TENANT STAFF','Staff A cannot DELETE a Tenant B assessment','a3000000-0000-0000-0000-000000000001','delete from public.avaliacoes where id=''bc000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacoes where id=''bc000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R3-SB-DEL-A','DENY','BLOCKING CROSS-TENANT STAFF','Staff B cannot DELETE a Tenant A assessment','b3000000-0000-0000-0000-000000000002','delete from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''');
+
+select pg_temp.qa_probe_actor_dml('R3-SA-INS-AQ','DENY','BLOCKING CROSS-TENANT STAFF','Staff A cannot INSERT a Tenant B assessment-question row','a3000000-0000-0000-0000-000000000001','insert into public.avaliacao_questoes(avaliacao_id,questao_id,ordem) values (''bc000000-0000-0000-0000-000000000002'',''bb000000-0000-0000-0000-000000000001'',2)','select count(*)::text from public.avaliacao_questoes where avaliacao_id=''bc000000-0000-0000-0000-000000000002'' and questao_id=''bb000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R3-SB-INS-AQ','DENY','BLOCKING CROSS-TENANT STAFF','Staff B cannot INSERT a Tenant A assessment-question row','b3000000-0000-0000-0000-000000000002','insert into public.avaliacao_questoes(avaliacao_id,questao_id,ordem) values (''ac000000-0000-0000-0000-000000000001'',''aa000000-0000-0000-0000-000000000010'',2)','select count(*)::text from public.avaliacao_questoes where avaliacao_id=''ac000000-0000-0000-0000-000000000001'' and questao_id=''aa000000-0000-0000-0000-000000000010''');
+select pg_temp.qa_probe_actor_dml('R3-SA-UPD-AQ','DENY','BLOCKING CROSS-TENANT STAFF','Staff A cannot UPDATE a Tenant B assessment-question row','a3000000-0000-0000-0000-000000000001','update public.avaliacao_questoes set ordem=9 where avaliacao_id=''bc000000-0000-0000-0000-000000000002'' and questao_id=''bb000000-0000-0000-0000-000000000002''','select ordem::text from public.avaliacao_questoes where avaliacao_id=''bc000000-0000-0000-0000-000000000002'' and questao_id=''bb000000-0000-0000-0000-000000000002''');
+select pg_temp.qa_probe_actor_dml('R3-SB-UPD-AQ','DENY','BLOCKING CROSS-TENANT STAFF','Staff B cannot UPDATE a Tenant A assessment-question row','b3000000-0000-0000-0000-000000000002','update public.avaliacao_questoes set ordem=9 where avaliacao_id=''ac000000-0000-0000-0000-000000000001'' and questao_id=''aa000000-0000-0000-0000-000000000001''','select ordem::text from public.avaliacao_questoes where avaliacao_id=''ac000000-0000-0000-0000-000000000001'' and questao_id=''aa000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R3-SA-DEL-AQ','DENY','BLOCKING CROSS-TENANT STAFF','Staff A cannot DELETE a Tenant B assessment-question row','a3000000-0000-0000-0000-000000000001','delete from public.avaliacao_questoes where avaliacao_id=''bc000000-0000-0000-0000-000000000001'' and questao_id=''bb000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacao_questoes where avaliacao_id=''bc000000-0000-0000-0000-000000000001'' and questao_id=''bb000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R3-SB-DEL-AQ','DENY','BLOCKING CROSS-TENANT STAFF','Staff B cannot DELETE a Tenant A assessment-question row','b3000000-0000-0000-0000-000000000002','delete from public.avaliacao_questoes where avaliacao_id=''ac000000-0000-0000-0000-000000000001'' and questao_id=''aa000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacao_questoes where avaliacao_id=''ac000000-0000-0000-0000-000000000001'' and questao_id=''aa000000-0000-0000-0000-000000000001''');
+
+select pg_temp.qa_probe_actor_dml('R3-SA-INS-T','DENY','BLOCKING CROSS-TENANT STAFF','Staff A cannot INSERT a Tenant B attempt (no write policy)','a3000000-0000-0000-0000-000000000001','insert into public.avaliacao_tentativas(id,tenant_id,avaliacao_id,matricula_id,usuario_id,numero_tentativa,questoes_ordem,gabarito_snapshot) values (''ca300000-0000-0000-0000-000000000003'',''b1000000-0000-0000-0000-000000000001'',''bc000000-0000-0000-0000-000000000001'',''b8000000-0000-0000-0000-000000000001'',''b4000000-0000-0000-0000-000000000010'',90,''[{"questao_id":"bb000000-0000-0000-0000-000000000001","pontos":1}]'',''{}'')','select count(*)::text from public.avaliacao_tentativas where id=''ca300000-0000-0000-0000-000000000003''');
+select pg_temp.qa_probe_actor_dml('R3-SB-INS-T','DENY','BLOCKING CROSS-TENANT STAFF','Staff B cannot INSERT a Tenant A attempt (no write policy)','b3000000-0000-0000-0000-000000000002','insert into public.avaliacao_tentativas(id,tenant_id,avaliacao_id,matricula_id,usuario_id,numero_tentativa,questoes_ordem,gabarito_snapshot) values (''cb300000-0000-0000-0000-000000000003'',''a1000000-0000-0000-0000-000000000001'',''ac000000-0000-0000-0000-000000000001'',''a8000000-0000-0000-0000-000000000003'',''a4000000-0000-0000-0000-000000000012'',90,''[{"questao_id":"aa000000-0000-0000-0000-000000000001","pontos":1}]'',''{}'')','select count(*)::text from public.avaliacao_tentativas where id=''cb300000-0000-0000-0000-000000000003''');
+
+select pg_temp.qa_probe_actor_dml('R3-SA-INS-R','DENY','BLOCKING CROSS-TENANT STAFF','Staff A cannot INSERT a Tenant B response','a3000000-0000-0000-0000-000000000001','insert into public.avaliacao_respostas(id,tenant_id,tentativa_id,questao_id) values (''ca300000-0000-0000-0000-000000000004'',''b1000000-0000-0000-0000-000000000001'',''bd000000-0000-0000-0000-000000000001'',''bb000000-0000-0000-0000-000000000001'')','select count(*)::text from public.avaliacao_respostas where id=''ca300000-0000-0000-0000-000000000004''');
+select pg_temp.qa_probe_actor_dml('R3-SB-INS-R','DENY','BLOCKING CROSS-TENANT STAFF','Staff B cannot INSERT a Tenant A response','b3000000-0000-0000-0000-000000000002','insert into public.avaliacao_respostas(id,tenant_id,tentativa_id,questao_id) values (''cb300000-0000-0000-0000-000000000004'',''a1000000-0000-0000-0000-000000000001'',''ad000000-0000-0000-0000-000000000001'',''aa000000-0000-0000-0000-000000000001'')','select count(*)::text from public.avaliacao_respostas where id=''cb300000-0000-0000-0000-000000000004''');
+select pg_temp.qa_probe_actor_dml('R3-SA-UPD-R','DENY','BLOCKING CROSS-TENANT STAFF','Staff A cannot UPDATE a Tenant B response','a3000000-0000-0000-0000-000000000001','update public.avaliacao_respostas set pontos_obtidos=1 where id=''be000000-0000-0000-0000-000000000001''','select coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_respostas where id=''be000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R3-SB-UPD-R','DENY','BLOCKING CROSS-TENANT STAFF','Staff B cannot UPDATE a Tenant A response','b3000000-0000-0000-0000-000000000002','update public.avaliacao_respostas set pontos_obtidos=1 where id=''ae000000-0000-0000-0000-000000000003''','select coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000000003''');
+select pg_temp.qa_probe_actor_dml('R3-SA-DEL-R','DENY','BLOCKING CROSS-TENANT STAFF','Staff A cannot DELETE a Tenant B response','a3000000-0000-0000-0000-000000000001','delete from public.avaliacao_respostas where id=''be000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacao_respostas where id=''be000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R3-SB-DEL-R','DENY','BLOCKING CROSS-TENANT STAFF','Staff B cannot DELETE a Tenant A response','b3000000-0000-0000-0000-000000000002','delete from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000000003''','select count(*)::text from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000000003''');
+
+-- R3-BLOCKER-A: corresponding same-tenant staff reads remain allowed.
+select pg_temp.qa_probe_actor_count('R3-SA-OWN-Q','ALLOW','BLOCKING SAME-TENANT STAFF','Staff A can SELECT its own Tenant A question','a3000000-0000-0000-0000-000000000001','select count(*) from public.questoes where id=''aa000000-0000-0000-0000-000000000001''','select count(*)::text from public.questoes where id=''aa000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_count('R3-SB-OWN-Q','ALLOW','BLOCKING SAME-TENANT STAFF','Staff B can SELECT its own Tenant B question','b3000000-0000-0000-0000-000000000002','select count(*) from public.questoes where id=''bb000000-0000-0000-0000-000000000001''','select count(*)::text from public.questoes where id=''bb000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_count('R3-SA-OWN-A','ALLOW','BLOCKING SAME-TENANT STAFF','Staff A can SELECT its own Tenant A assessment','a3000000-0000-0000-0000-000000000001','select count(*) from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_count('R3-SB-OWN-A','ALLOW','BLOCKING SAME-TENANT STAFF','Staff B can SELECT its own Tenant B assessment','b3000000-0000-0000-0000-000000000002','select count(*) from public.avaliacoes where id=''bc000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacoes where id=''bc000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_count('R3-SA-OWN-AQ','ALLOW','BLOCKING SAME-TENANT STAFF','Staff A can SELECT its own Tenant A assessment-question row','a3000000-0000-0000-0000-000000000001','select count(*) from public.avaliacao_questoes where avaliacao_id=''ac000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacao_questoes where avaliacao_id=''ac000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_count('R3-SB-OWN-AQ','ALLOW','BLOCKING SAME-TENANT STAFF','Staff B can SELECT its own Tenant B assessment-question row','b3000000-0000-0000-0000-000000000002','select count(*) from public.avaliacao_questoes where avaliacao_id=''bc000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacao_questoes where avaliacao_id=''bc000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_count('R3-SA-OWN-T','ALLOW','BLOCKING SAME-TENANT STAFF','Staff A can SELECT its own Tenant A attempt','a3000000-0000-0000-0000-000000000001','select count(*) from public.avaliacao_tentativas where id=''ad000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacao_tentativas where id=''ad000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_count('R3-SB-OWN-T','ALLOW','BLOCKING SAME-TENANT STAFF','Staff B can SELECT its own Tenant B attempt','b3000000-0000-0000-0000-000000000002','select count(*) from public.avaliacao_tentativas where id=''bd000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacao_tentativas where id=''bd000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_count('R3-SA-OWN-R','ALLOW','BLOCKING SAME-TENANT STAFF','Staff A can SELECT its own Tenant A response','a3000000-0000-0000-0000-000000000001','select count(*) from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000000003''','select count(*)::text from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000000003''');
+select pg_temp.qa_probe_actor_count('R3-SB-OWN-R','ALLOW','BLOCKING SAME-TENANT STAFF','Staff B can SELECT its own Tenant B response','b3000000-0000-0000-0000-000000000002','select count(*) from public.avaliacao_respostas where id=''be000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacao_respostas where id=''be000000-0000-0000-0000-000000000001''');
+
+-- R3-BLOCKER-B: course-wide and wrong Class/Subject assessment writes are blocking.
+select pg_temp.qa_probe_actor_dml('R3-COURSE-7A-MATH','DENY','BLOCKING COURSE-WIDE ASSESSMENT','Teacher Exact A without the requested assignment cannot create 7A Math assessment','a3000000-0000-0000-0000-000000000005','insert into public.avaliacoes(id,tenant_id,curso_id,disciplina_id,turma_id,titulo,situacao,criado_por) values (''ac300000-0000-0000-0000-000000000003'',''a1000000-0000-0000-0000-000000000001'',''a5000000-0000-0000-0000-000000000001'',''a6000000-0000-0000-0000-000000000001'',''a7000000-0000-0000-0000-000000000001'',''QA forbidden 7A Math'',''rascunho'',''a4000000-0000-0000-0000-000000000005'')','select count(*)::text from public.avaliacoes where id=''ac300000-0000-0000-0000-000000000003''');
+select pg_temp.qa_probe_actor_dml('R3-COURSE-8B-MATH','DENY','BLOCKING COURSE-WIDE ASSESSMENT','Teacher Exact A without the requested assignment cannot create 8B Math assessment','a3000000-0000-0000-0000-000000000005','insert into public.avaliacoes(id,tenant_id,curso_id,disciplina_id,turma_id,titulo,situacao,criado_por) values (''ac300000-0000-0000-0000-000000000004'',''a1000000-0000-0000-0000-000000000001'',''a5000000-0000-0000-0000-000000000001'',''a6000000-0000-0000-0000-000000000001'',''a7000000-0000-0000-0000-000000000005'',''QA forbidden 8B Math'',''rascunho'',''a4000000-0000-0000-0000-000000000005'')','select count(*)::text from public.avaliacoes where id=''ac300000-0000-0000-0000-000000000004''');
+select pg_temp.qa_probe_actor_dml('R3-COURSE-8A-PHYSICS','DENY','BLOCKING COURSE-WIDE ASSESSMENT','Teacher Exact A without the requested assignment cannot create 8A Physics assessment','a3000000-0000-0000-0000-000000000005','insert into public.avaliacoes(id,tenant_id,curso_id,disciplina_id,turma_id,titulo,situacao,criado_por) values (''ac300000-0000-0000-0000-000000000005'',''a1000000-0000-0000-0000-000000000001'',''a5000000-0000-0000-0000-000000000001'',''a6000000-0000-0000-0000-000000000002'',''a7000000-0000-0000-0000-000000000003'',''QA forbidden 8A Physics'',''rascunho'',''a4000000-0000-0000-0000-000000000005'')','select count(*)::text from public.avaliacoes where id=''ac300000-0000-0000-0000-000000000005''');
+select pg_temp.qa_probe_actor_dml('R3-COURSE-WIDE','DENY','BLOCKING COURSE-WIDE ASSESSMENT','Teacher Exact A without the requested Class cannot create a course-wide Math assessment','a3000000-0000-0000-0000-000000000005','insert into public.avaliacoes(id,tenant_id,curso_id,disciplina_id,turma_id,titulo,situacao,criado_por) values (''ac300000-0000-0000-0000-000000000006'',''a1000000-0000-0000-0000-000000000001'',''a5000000-0000-0000-0000-000000000001'',''a6000000-0000-0000-0000-000000000001'',null,''QA forbidden course-wide'',''rascunho'',''a4000000-0000-0000-0000-000000000005'')','select count(*)::text from public.avaliacoes where id=''ac300000-0000-0000-0000-000000000006''');
+select pg_temp.qa_probe_actor_dml('R3-EXACT-8A-MATH','ALLOW','BLOCKING COURSE-WIDE ASSESSMENT','Teacher A with exact active 8A Math assignment can create an 8A Math assessment','a3000000-0000-0000-0000-000000000005','insert into public.avaliacoes(id,tenant_id,curso_id,disciplina_id,turma_id,titulo,situacao,criado_por) values (''ac300000-0000-0000-0000-000000000007'',''a1000000-0000-0000-0000-000000000001'',''a5000000-0000-0000-0000-000000000001'',''a6000000-0000-0000-0000-000000000001'',''a7000000-0000-0000-0000-000000000003'',''QA allowed 8A Math'',''rascunho'',''a4000000-0000-0000-0000-000000000005'')','select count(*)::text from public.avaliacoes where id=''ac300000-0000-0000-0000-000000000007''');
+select pg_temp.qa_probe_actor_count('R3-AQ-EXACT-ALLOW','ALLOW','BLOCKING COURSE-WIDE ASSESSMENT','Teacher A reads an assessment-question row only through exact 8A Math assignment','a3000000-0000-0000-0000-000000000002','select count(*) from public.avaliacao_questoes where avaliacao_id=''ac000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacao_questoes where avaliacao_id=''ac000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_count('R3-AQ-NO-ASSIGNMENT','DENY','BLOCKING COURSE-WIDE ASSESSMENT','Teacher A3 cannot read an assessment-question row without exact assignment','a3000000-0000-0000-0000-000000000004','select count(*) from public.avaliacao_questoes where avaliacao_id=''ac000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacao_questoes where avaliacao_id=''ac000000-0000-0000-0000-000000000001''');
+
+-- R3-BLOCKER-C: helper ACL and no arbitrary-tenant oracle.
+select pg_temp.qa_record('R3-HELPER-ACL','ALLOW',case when has_function_privilege('public','public.student_active_in_class(uuid,uuid,uuid)','EXECUTE') = false and has_function_privilege('anon','public.student_active_in_class(uuid,uuid,uuid)','EXECUTE') = false and has_function_privilege('authenticated','public.student_active_in_class(uuid,uuid,uuid)','EXECUTE') = true then 'ALLOW' else 'DENY' end,'SECURITY DEFINER helper is internal to RLS: authenticated execution retained only for presencas policy; PUBLIC and anon denied','','','ACL is explicit and tenant binding is tested below');
+select pg_temp.qa_probe_actor_count('R3-HELPER-SAME-TENANT','ALLOW','BLOCKING HELPER TENANT BINDING','Authenticated Teacher A can evaluate an active Student A in Tenant A','a3000000-0000-0000-0000-000000000002','select case when public.student_active_in_class(''a4000000-0000-0000-0000-000000000012'',''a7000000-0000-0000-0000-000000000003'',public.current_tenant_id()) then 1 else 0 end::bigint','select 1::text');
+select pg_temp.qa_probe_actor_count('R3-HELPER-TEACHER-CROSS-TENANT','DENY','BLOCKING HELPER TENANT BINDING','Authenticated Teacher A cannot probe Student B using Tenant B','a3000000-0000-0000-0000-000000000002','select case when public.student_active_in_class(''b4000000-0000-0000-0000-000000000010'',''b7000000-0000-0000-0000-000000000001'',''b1000000-0000-0000-0000-000000000001'') then 1 else 0 end::bigint','select 1::text');
+select pg_temp.qa_probe_actor_count('R3-HELPER-STUDENT-CROSS-TENANT','DENY','BLOCKING HELPER TENANT BINDING','Authenticated Student A cannot probe Student B using Tenant B','a3000000-0000-0000-0000-000000000012','select case when public.student_active_in_class(''b4000000-0000-0000-0000-000000000010'',''b7000000-0000-0000-0000-000000000001'',''b1000000-0000-0000-0000-000000000001'') then 1 else 0 end::bigint','select 1::text');
+select pg_temp.qa_probe_actor_count('R3-HELPER-STAFF-CROSS-TENANT','DENY','BLOCKING HELPER TENANT BINDING','Authenticated Staff A cannot probe Student B using Tenant B','a3000000-0000-0000-0000-000000000001','select case when public.student_active_in_class(''b4000000-0000-0000-0000-000000000010'',''b7000000-0000-0000-0000-000000000001'',''b1000000-0000-0000-0000-000000000001'') then 1 else 0 end::bigint','select 1::text');
+
+-- R3-BLOCKER-D and grading RPC: every negative is a real RPC invocation.
+select pg_temp.qa_probe_actor_rpc_no_gabarito('R3-GRADE-POSITIVE','ALLOW_NO_GABARITO','BLOCKING GRADING RPC','Teacher Exact A with exact 8A Math assignment grades a legitimate response; response has no gabarito key','a3000000-0000-0000-0000-000000000005','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000003''::uuid,1,''QA legitimate grading'')','select coalesce(pontos_obtidos::text,''NULL'')||'':''||corrigida::text from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000000003''');
+select pg_temp.qa_probe_actor_rpc('R3-GRADE-NO-ASSIGNMENT','DENY','BLOCKING GRADING RPC','Teacher A3 without assignment is denied by the real grading RPC','a3000000-0000-0000-0000-000000000004','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000003''::uuid,1,''QA forbidden grading'')','select coalesce(pontos_obtidos::text,''NULL'')||'':''||corrigida::text from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000000003''');
+select pg_temp.qa_probe_actor_rpc('R3-GRADE-WRONG-CLASS','DENY','BLOCKING GRADING RPC','Teacher A is denied for a 7A Physics response without exact Class + Subject assignment','a3000000-0000-0000-0000-000000000002','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000002''::uuid,1,''QA wrong class grading'')','select coalesce(pontos_obtidos::text,''NULL'')||'':''||corrigida::text from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000000002''');
+select pg_temp.qa_probe_actor_rpc('R3-GRADE-WRONG-SUBJECT','DENY','BLOCKING GRADING RPC','Teacher A is denied for revoked 8A Physics assignment','a3000000-0000-0000-0000-000000000002','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000001''::uuid,1,''QA revoked subject grading'')','select coalesce(pontos_obtidos::text,''NULL'')||'':''||corrigida::text from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_rpc('R3-GRADE-INACTIVE','DENY','BLOCKING GRADING RPC','Inactive Teacher A2 is denied by the real grading RPC','a3000000-0000-0000-0000-000000000003','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000003''::uuid,1,''QA inactive grading'')','select coalesce(pontos_obtidos::text,''NULL'')||'':''||corrigida::text from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000000003''');
+select pg_temp.qa_probe_actor_rpc('R3-GRADE-STUDENT','DENY','BLOCKING GRADING RPC','Student A is denied by the real grading RPC','a3000000-0000-0000-0000-000000000012','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000003''::uuid,1,''QA student grading'')','select coalesce(pontos_obtidos::text,''NULL'')||'':''||corrigida::text from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000000003''');
+select pg_temp.qa_probe_actor_rpc('R3-GRADE-STAFF-B','DENY','BLOCKING GRADING RPC','Staff B cannot grade a Tenant A response','b3000000-0000-0000-0000-000000000002','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000003''::uuid,1,''QA cross-tenant staff grading'')','select coalesce(pontos_obtidos::text,''NULL'')||'':''||corrigida::text from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000000003''');
+select pg_temp.qa_probe_actor_rpc('R3-GRADE-TEACHER-B','DENY','BLOCKING GRADING RPC','Teacher B cannot grade a Tenant A response','b3000000-0000-0000-0000-000000000001','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000003''::uuid,1,''QA cross-tenant teacher grading'')','select coalesce(pontos_obtidos::text,''NULL'')||'':''||corrigida::text from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000000003''');
+select pg_temp.qa_probe_actor_rpc('R3-GRADE-CROSS-TENANT','DENY','BLOCKING GRADING RPC','Teacher A cannot grade a Tenant B response','a3000000-0000-0000-0000-000000000002','','select public.corrigir_resposta_avaliacao(''be000000-0000-0000-0000-000000000001''::uuid,1,''QA cross-tenant grading'')','select coalesce(pontos_obtidos::text,''NULL'')||'':''||corrigida::text from public.avaliacao_respostas where id=''be000000-0000-0000-0000-000000000001''');
 
 -- Explicit direct RPC probes for current runtime ACL and student same-course eligibility.
 select set_config('request.jwt.claim.sub','a3000000-0000-0000-0000-000000000002',false);
