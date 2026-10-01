@@ -82,6 +82,74 @@ END $$;
 ROLLBACK;
 \echo 'M4_GABARITO_COLUMN_REGRANT_KILLED: PASS'
 
+-- M5: weakening tenant-bound staff authorization must permit a cross-tenant
+-- mutation inside the transaction.
+BEGIN;
+CREATE POLICY mutation_staff_cross_tenant ON public.questoes
+  FOR ALL TO authenticated USING (true) WITH CHECK (true);
+ALTER TABLE public.questoes DISABLE TRIGGER ALL;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub','a3000000-0000-0000-0000-000000000001',false);
+DO $$
+BEGIN
+  UPDATE public.questoes SET enunciado='QA M5 unauthorized cross-tenant edit'
+  WHERE id='bb000000-0000-0000-0000-000000000001';
+  IF NOT FOUND THEN RAISE EXCEPTION 'M5 tenant-bound staff weakening was not observed'; END IF;
+END $$;
+ROLLBACK;
+\echo 'M5_TENANT_BOUND_STAFF_WEAKENING_KILLED: PASS'
+
+-- M6: weakening exact assessment Class + Subject authority must permit an
+-- assessment in a class for which Teacher Exact has no assignment.
+BEGIN;
+CREATE OR REPLACE FUNCTION public.teacher_assessment_scope(p_turma_id uuid, p_disciplina_id uuid)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT true $$;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub','a3000000-0000-0000-0000-000000000005',false);
+DO $$
+BEGIN
+  INSERT INTO public.avaliacoes(id,tenant_id,curso_id,disciplina_id,turma_id,titulo,situacao,criado_por)
+  VALUES ('ac300000-0000-0000-0000-000000000030','a1000000-0000-0000-0000-000000000001','a5000000-0000-0000-0000-000000000001','a6000000-0000-0000-0000-000000000001','a7000000-0000-0000-0000-000000000001','QA M6 unauthorized 7A Math','rascunho','a4000000-0000-0000-0000-000000000005');
+  IF NOT FOUND THEN RAISE EXCEPTION 'M6 exact assessment scope weakening was not observed'; END IF;
+END $$;
+ROLLBACK;
+\echo 'M6_EXACT_ASSESSMENT_SCOPE_WEAKENING_KILLED: PASS'
+
+-- M7: weakening question authority must permit Teacher X to take over a
+-- question bound exclusively to Teacher Y's 7A Math assessment.
+BEGIN;
+CREATE OR REPLACE FUNCTION public.teacher_question_scope(p_question_id uuid, p_subject_id uuid)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT true $$;
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub','a3000000-0000-0000-0000-000000000005',false);
+DO $$
+BEGIN
+  UPDATE public.questoes
+  SET criado_por='a4000000-0000-0000-0000-000000000005', enunciado='QA M7 unauthorized takeover'
+  WHERE id='aa000000-0000-0000-0000-000000000005';
+  IF NOT FOUND THEN RAISE EXCEPTION 'M7 question authority weakening was not observed'; END IF;
+END $$;
+ROLLBACK;
+\echo 'M7_CROSS_CLASS_QUESTION_AUTHORITY_WEAKENING_KILLED: PASS'
+
+-- M8: adding a direct Teacher response UPDATE policy must make the bypass
+-- observable; the production state has no such policy after migration 046.
+BEGIN;
+CREATE POLICY mutation_direct_response_update ON public.avaliacao_respostas
+  FOR UPDATE TO authenticated
+  USING (tenant_id = public.current_tenant_id())
+  WITH CHECK (tenant_id = public.current_tenant_id());
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claim.sub','a3000000-0000-0000-0000-000000000005',false);
+DO $$
+BEGIN
+  UPDATE public.avaliacao_respostas SET pontos_obtidos=999
+  WHERE id='ae000000-0000-0000-0000-000000000003';
+  IF NOT FOUND THEN RAISE EXCEPTION 'M8 direct grading write weakening was not observed'; END IF;
+END $$;
+ROLLBACK;
+\echo 'M8_DIRECT_GRADING_WRITE_WEAKENING_KILLED: PASS'
+
 -- Post-rollback integrity proves no mutation survived.
 SET ROLE authenticated;
 SELECT set_config('request.jwt.claim.sub','a3000000-0000-0000-0000-000000000002',false);
