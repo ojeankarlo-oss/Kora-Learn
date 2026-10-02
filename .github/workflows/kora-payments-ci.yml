@@ -124,8 +124,49 @@ jobs:
           db=kora_sc004_r5_hb1
           cleanup() { dropdb --if-exists -U supabase_admin "$db" >/dev/null 2>&1; }
           trap cleanup EXIT
-          createdb -U supabase_admin --template=kora_ci "$db"
+          # HB1 must start from a truly pristine database. Cloning kora_ci here
+          # would replay 001-039 on an already migrated template and fail on
+          # pre-existing objects before the 040 preflight is exercised.
+          dropdb --if-exists -U supabase_admin "$db" >/dev/null 2>&1 || true
+          createdb -U supabase_admin --template=template0 "$db"
           export PGDATABASE="$db"
+
+          # Recreate only the disposable Supabase compatibility layer that the
+          # service database has before application migrations. The application
+          # schema itself remains pristine until the prefix replay below.
+          psql -U postgres -v ON_ERROR_STOP=1 <<SQL
+          CREATE EXTENSION IF NOT EXISTS pgcrypto;
+          CREATE SCHEMA auth;
+          CREATE SCHEMA extensions;
+          CREATE SCHEMA storage;
+          CREATE SCHEMA vault;
+          CREATE EXTENSION IF NOT EXISTS pg_net;
+          CREATE OR REPLACE FUNCTION extensions.gen_random_uuid() RETURNS uuid LANGUAGE sql VOLATILE AS \$\$ SELECT public.gen_random_uuid() \$\$;
+          CREATE OR REPLACE FUNCTION extensions.gen_random_bytes(p_length integer) RETURNS bytea LANGUAGE sql VOLATILE AS \$\$ SELECT public.gen_random_bytes(p_length) \$\$;
+          CREATE OR REPLACE FUNCTION extensions.digest(p_data text, p_type text) RETURNS bytea LANGUAGE sql IMMUTABLE AS \$\$ SELECT public.digest(p_data, p_type) \$\$;
+          CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS \$\$ SELECT NULLIF(current_setting('request.jwt.claim.sub', true), '')::uuid; \$\$;
+          CREATE TABLE auth.users (id uuid PRIMARY KEY, email text UNIQUE NOT NULL, email_confirmed_at timestamptz);
+          ALTER TABLE auth.users OWNER TO supabase_auth_admin;
+          CREATE TABLE vault.decrypted_secrets (name text PRIMARY KEY, decrypted_secret text);
+          ALTER DATABASE "$db" SET search_path = public, extensions;
+          GRANT USAGE ON SCHEMA auth, storage, extensions, vault, net TO postgres, supabase_auth_admin, anon, authenticated, service_role;
+          GRANT SELECT ON auth.users TO postgres, supabase_auth_admin;
+          GRANT EXECUTE ON FUNCTION auth.uid() TO PUBLIC;
+          GRANT USAGE, CREATE ON SCHEMA public TO postgres;
+          GRANT USAGE, CREATE ON SCHEMA storage TO supabase_storage_admin;
+          GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+          SQL
+
+          pristine_public_tables=$(psql -U postgres -At -c "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p');")
+          if [[ "$pristine_public_tables" != "0" ]]; then
+            echo "SC-004 HB1 FAIL: pristine bootstrap already contains public tables ($pristine_public_tables)"
+            exit 1
+          fi
+
+          bootstrap_copy=$(mktemp)
+          trap 'rm -f "$bootstrap_copy"; cleanup' EXIT
+          sed "s/kora_ci/$db/g" tests/payments/sql/bootstrap.sql > "$bootstrap_copy"
+          psql -U postgres -v ON_ERROR_STOP=1 -f "$bootstrap_copy"
 
           for migration in $(find supabase/migrations -maxdepth 1 -type f -print | sort); do
             name=$(basename "$migration")

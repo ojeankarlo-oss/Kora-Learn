@@ -37,19 +37,62 @@ BEGIN
 END
 $$;
 
+
+-- A trigger-level mutation must be exercised even when the application policy
+-- also denies the same action. This helper uses service_role (not a database
+-- superuser) only to reach the database trigger boundary; state is always
+-- rolled back and unexpected errors are INCONCLUSIVE.
+CREATE OR REPLACE FUNCTION pg_temp.qa_probe_role_dml(
+  p_id text, p_expected text, p_classification text, p_detail text,
+  p_actor_role text, p_sql text, p_state_sql text
+) RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_before text;
+  v_after text;
+  v_rows integer := 0;
+  v_observed text := 'INCONCLUSIVE';
+  v_state text := '';
+  v_message text := '';
+BEGIN
+  RESET ROLE;
+  EXECUTE p_state_sql INTO v_before;
+  BEGIN
+    EXECUTE format('SET LOCAL ROLE %I', p_actor_role);
+    EXECUTE p_sql;
+    GET DIAGNOSTICS v_rows = ROW_COUNT;
+    v_observed := CASE WHEN v_rows > 0 THEN 'ALLOW' ELSE 'DENY' END;
+    RAISE EXCEPTION USING MESSAGE = '__QA_ROLLBACK__';
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_state = RETURNED_SQLSTATE, v_message = MESSAGE_TEXT;
+    IF v_message <> '__QA_ROLLBACK__' THEN
+      v_observed := CASE WHEN v_state IN ('42501','42503') THEN 'DENY' ELSE 'INCONCLUSIVE' END;
+    END IF;
+  END;
+  RESET ROLE;
+  EXECUTE p_state_sql INTO v_after;
+  IF v_before IS DISTINCT FROM v_after THEN v_observed := 'STATE_CHANGED'; END IF;
+  PERFORM pg_temp.qa_record(
+    p_id,p_expected,v_observed,p_classification,v_before,v_after,
+    p_detail || ' rows=' || v_rows || ' sqlstate=' || coalesce(v_state,'') || ' message=' || coalesce(v_message,'')
+  );
+END
+$$;
+
 -- M1 — staff tenant boundary: the normal cross-tenant staff assertion must
 -- detect a forged session tenant after the tenant resolver is weakened.
-select pg_temp.qa_probe_actor_dml('M1-BASELINE','DENY','MUTATION NORMAL ASSERTION','Staff A cannot update Tenant B question','a3000000-0000-0000-0000-000000000001','update public.questoes set enunciado=''QA M1 baseline'' where id=''bb000000-0000-0000-0000-000000000001''','select enunciado from public.questoes where id=''bb000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('M1-BASELINE','DENY','MUTATION NORMAL ASSERTION','Staff A cannot update Tenant B question','a3000000-0000-0000-0000-000000000001','update public.questoes set enunciado=''QA M1 baseline'' where id=''bb000000-0000-0000-0000-000000000003''','select enunciado from public.questoes where id=''bb000000-0000-0000-0000-000000000003''');
 select pg_temp.qa_expect_result('M1-BASELINE','PASS');
 BEGIN;
 CREATE OR REPLACE FUNCTION public.current_tenant_id()
 RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public
 AS $$ SELECT 'b1000000-0000-0000-0000-000000000001'::uuid $$;
-select pg_temp.qa_probe_actor_dml('M1-MUTATED','DENY','MUTATION NORMAL ASSERTION','The same cross-tenant staff assertion after tenant derivation mutation','a3000000-0000-0000-0000-000000000001','update public.questoes set enunciado=''QA M1 mutated'' where id=''bb000000-0000-0000-0000-000000000001''','select enunciado from public.questoes where id=''bb000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('M1-MUTATED','DENY','MUTATION NORMAL ASSERTION','The same cross-tenant staff assertion after tenant derivation mutation','a3000000-0000-0000-0000-000000000001','update public.questoes set enunciado=''QA M1 mutated'' where id=''bb000000-0000-0000-0000-000000000003''','select enunciado from public.questoes where id=''bb000000-0000-0000-0000-000000000003''');
 select pg_temp.qa_expect_mutation('M1-MUTATED');
 DELETE FROM qa_results WHERE id='M1-MUTATED';
 ROLLBACK;
-select pg_temp.qa_probe_actor_dml('M1-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Staff A is denied again after tenant resolver rollback','a3000000-0000-0000-0000-000000000001','update public.questoes set enunciado=''QA M1 rollback'' where id=''bb000000-0000-0000-0000-000000000001''','select enunciado from public.questoes where id=''bb000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('M1-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Staff A is denied again after tenant resolver rollback','a3000000-0000-0000-0000-000000000001','update public.questoes set enunciado=''QA M1 rollback'' where id=''bb000000-0000-0000-0000-000000000003''','select enunciado from public.questoes where id=''bb000000-0000-0000-0000-000000000003''');
 select pg_temp.qa_expect_result('M1-ROLLBACK','PASS');
 \echo 'M1_STAFF_TENANT_BOUNDARY_KILLED: PASS'
 
@@ -68,16 +111,18 @@ select pg_temp.qa_expect_result('M2-ROLLBACK','PASS');
 \echo 'M2_EXACT_CLASS_SUBJECT_AUTHORITY_KILLED: PASS'
 
 -- M3 — assessment-bound question cross-class authority.
-select pg_temp.qa_probe_actor_dml('M3-BASELINE','DENY','MUTATION NORMAL ASSERTION','Teacher X cannot take over Teacher Y assessment-bound question','a3000000-0000-0000-0000-000000000005','update public.questoes set criado_por=''a4000000-0000-0000-0000-000000000005'' where id=''aa000000-0000-0000-0000-000000000005''','select criado_por::text from public.questoes where id=''aa000000-0000-0000-0000-000000000005''');
+-- Teacher Exact shares the 8A + Math assignment with Teacher A, so this is
+-- specifically a provenance takeover rather than a wrong-scope denial.
+select pg_temp.qa_probe_actor_dml('M3-BASELINE','DENY','MUTATION NORMAL ASSERTION','Teacher Exact cannot take over Teacher A assessment-bound question','a3000000-0000-0000-0000-000000000005','update public.questoes set criado_por=''a4000000-0000-0000-0000-000000000005'' where id=''aa000000-0000-0000-0000-000000000001''','select criado_por::text from public.questoes where id=''aa000000-0000-0000-0000-000000000001''');
 select pg_temp.qa_expect_result('M3-BASELINE','PASS');
 BEGIN;
-CREATE OR REPLACE FUNCTION public.teacher_question_scope(p_question_id uuid,p_subject_id uuid)
-RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT true $$;
-select pg_temp.qa_probe_actor_dml('M3-MUTATED','DENY','MUTATION NORMAL ASSERTION','The same question takeover assertion after scope mutation','a3000000-0000-0000-0000-000000000005','update public.questoes set criado_por=''a4000000-0000-0000-0000-000000000005'' where id=''aa000000-0000-0000-0000-000000000005''','select criado_por::text from public.questoes where id=''aa000000-0000-0000-0000-000000000005''');
+CREATE OR REPLACE FUNCTION public.sc004_guard_academic_update()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$ BEGIN RETURN NEW; END $$;
+select pg_temp.qa_probe_actor_dml('M3-MUTATED','DENY','MUTATION NORMAL ASSERTION','The same question takeover assertion after scope mutation','a3000000-0000-0000-0000-000000000005','update public.questoes set criado_por=''a4000000-0000-0000-0000-000000000005'' where id=''aa000000-0000-0000-0000-000000000001''','select criado_por::text from public.questoes where id=''aa000000-0000-0000-0000-000000000001''');
 select pg_temp.qa_expect_mutation('M3-MUTATED');
 DELETE FROM qa_results WHERE id='M3-MUTATED';
 ROLLBACK;
-select pg_temp.qa_probe_actor_dml('M3-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Teacher X is denied again after question scope rollback','a3000000-0000-0000-0000-000000000005','update public.questoes set criado_por=''a4000000-0000-0000-0000-000000000005'' where id=''aa000000-0000-0000-0000-000000000005''','select criado_por::text from public.questoes where id=''aa000000-0000-0000-0000-000000000005''');
+select pg_temp.qa_probe_actor_dml('M3-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Teacher Exact is denied again after question scope rollback','a3000000-0000-0000-0000-000000000005','update public.questoes set criado_por=''a4000000-0000-0000-0000-000000000005'' where id=''aa000000-0000-0000-0000-000000000001''','select criado_por::text from public.questoes where id=''aa000000-0000-0000-0000-000000000001''');
 select pg_temp.qa_expect_result('M3-ROLLBACK','PASS');
 \echo 'M3_QUESTION_CROSS_CLASS_AUTHORITY_KILLED: PASS'
 
@@ -164,3 +209,68 @@ SELECT count(*) AS mutation_assertion_rows
 FROM qa_results
 WHERE id like 'M%-BASELINE' OR id like 'M%-ROLLBACK';
 \echo 'MUTATION_ROLLBACK_INTEGRITY: PASS'
+
+
+-- M9 — grading authorization. The same valid submitted response must become
+-- ALLOW only when the exact-assignment primitive is weakened.
+select pg_temp.qa_probe_actor_rpc('M9-BASELINE','DENY','MUTATION NORMAL ASSERTION','Teacher A3 without assignment cannot grade an already submitted response','a3000000-0000-0000-0000-000000000004','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,1,''QA M9 baseline'')','select situacao::text||'':''||corrigida::text from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
+select pg_temp.qa_expect_result('M9-BASELINE','PASS');
+BEGIN;
+CREATE OR REPLACE FUNCTION public.teacher_assessment_scope(p_turma_id uuid,p_disciplina_id uuid)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT true $$;
+select pg_temp.qa_probe_actor_rpc('M9-MUTATED','DENY','MUTATION NORMAL ASSERTION','The same submitted grading assertion after grading authorization mutation','a3000000-0000-0000-0000-000000000004','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,1,''QA M9 mutated'')','select situacao::text||'':''||corrigida::text from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
+select pg_temp.qa_expect_mutation('M9-MUTATED');
+DELETE FROM qa_results WHERE id='M9-MUTATED';
+ROLLBACK;
+select pg_temp.qa_probe_actor_rpc('M9-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Teacher A3 is denied again after grading authorization rollback','a3000000-0000-0000-0000-000000000004','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,1,''QA M9 rollback'')','select situacao::text||'':''||corrigida::text from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
+select pg_temp.qa_expect_result('M9-ROLLBACK','PASS');
+\echo 'M9_GRADING_AUTHORIZATION_KILLED: PASS';
+
+-- M10 — X11 owner DELETE guard. Both the helper's unlinked-question owner
+-- branch and the policy's creator condition are weakened inside the mutation.
+select pg_temp.qa_probe_actor_dml('M10-BASELINE','DENY','MUTATION NORMAL ASSERTION','Teacher Exact cannot delete Teacher A unlinked question','a3000000-0000-0000-0000-000000000005','delete from public.questoes where id=''aa000000-0000-0000-0000-000000000008''','select count(*)::text from public.questoes where id=''aa000000-0000-0000-0000-000000000008''');
+select pg_temp.qa_expect_result('M10-BASELINE','PASS');
+BEGIN;
+CREATE OR REPLACE FUNCTION public.teacher_question_scope(p_question_id uuid,p_subject_id uuid)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = '' AS $$ SELECT true $$;
+DROP POLICY IF EXISTS questoes_teacher_delete_r4 ON public.questoes;
+CREATE POLICY mutation_x11_question_delete ON public.questoes FOR DELETE TO authenticated
+  USING (tenant_id = public.current_tenant_id() AND public.teacher_question_scope(id, disciplina_id));
+select pg_temp.qa_probe_actor_dml('M10-MUTATED','DENY','MUTATION NORMAL ASSERTION','The same question DELETE assertion after X11 owner condition removal','a3000000-0000-0000-0000-000000000005','delete from public.questoes where id=''aa000000-0000-0000-0000-000000000008''','select count(*)::text from public.questoes where id=''aa000000-0000-0000-0000-000000000008''');
+select pg_temp.qa_expect_mutation('M10-MUTATED');
+DELETE FROM qa_results WHERE id='M10-MUTATED';
+ROLLBACK;
+select pg_temp.qa_probe_actor_dml('M10-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Teacher Exact is denied again after X11 rollback','a3000000-0000-0000-0000-000000000005','delete from public.questoes where id=''aa000000-0000-0000-0000-000000000008''','select count(*)::text from public.questoes where id=''aa000000-0000-0000-0000-000000000008''');
+select pg_temp.qa_expect_result('M10-ROLLBACK','PASS');
+\echo 'M10_OWNER_DELETE_GUARD_KILLED: PASS';
+
+-- M11 — post-evidence academic configuration immutability.
+select pg_temp.qa_probe_actor_dml('M11-BASELINE','DENY','MUTATION NORMAL ASSERTION','Staff cannot change nota_minima after evidence exists','a3000000-0000-0000-0000-000000000001','update public.avaliacoes set nota_minima=99 where id=''ac000000-0000-0000-0000-000000000001''','select nota_minima::text from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_expect_result('M11-BASELINE','PASS');
+BEGIN;
+CREATE OR REPLACE FUNCTION public.sc004_guard_academic_update()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$ BEGIN RETURN NEW; END $$;
+select pg_temp.qa_probe_actor_dml('M11-MUTATED','DENY','MUTATION NORMAL ASSERTION','The same post-evidence configuration assertion after guard removal','a3000000-0000-0000-0000-000000000001','update public.avaliacoes set nota_minima=99 where id=''ac000000-0000-0000-0000-000000000001''','select nota_minima::text from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_expect_mutation('M11-MUTATED');
+DELETE FROM qa_results WHERE id='M11-MUTATED';
+ROLLBACK;
+select pg_temp.qa_probe_actor_dml('M11-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Staff is denied again after post-evidence guard rollback','a3000000-0000-0000-0000-000000000001','update public.avaliacoes set nota_minima=99 where id=''ac000000-0000-0000-0000-000000000001''','select nota_minima::text from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_expect_result('M11-ROLLBACK','PASS');
+\echo 'M11_POST_EVIDENCE_IMMUTABILITY_KILLED: PASS';
+
+-- M12 — X7b trigger removal. service_role is used only to pass the RLS
+-- boundary and reach the physical evidence trigger; it is not a superuser.
+BEGIN;
+GRANT SELECT, DELETE ON public.avaliacoes TO service_role;
+GRANT SELECT, DELETE ON public.avaliacao_questoes, public.avaliacao_tentativas, public.avaliacao_respostas TO service_role;
+select pg_temp.qa_probe_role_dml('M12-BASELINE','DENY','MUTATION NORMAL ASSERTION','Evidence trigger rejects physical assessment delete','service_role','delete from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_expect_result('M12-BASELINE','PASS');
+DROP TRIGGER trg_sc004_assessment_evidence_delete ON public.avaliacoes;
+DROP TRIGGER trg_sc004_assessment_question_evidence ON public.avaliacao_questoes;
+select pg_temp.qa_probe_role_dml('M12-MUTATED','DENY','MUTATION NORMAL ASSERTION','The same physical-delete assertion after X7b trigger removal','service_role','delete from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_expect_mutation('M12-MUTATED');
+DELETE FROM qa_results WHERE id='M12-MUTATED';
+ROLLBACK;
+select pg_temp.qa_probe_role_dml('M12-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Physical evidence delete is denied again after X7b rollback','service_role','delete from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_expect_result('M12-ROLLBACK','PASS');
+\echo 'M12_EVIDENCE_DELETE_TRIGGER_KILLED: PASS';

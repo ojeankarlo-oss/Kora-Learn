@@ -49,7 +49,7 @@ create or replace function pg_temp.qa_probe_dml(
 declare
   v_ok boolean := false;
   v_rows integer := 0;
-  v_observed text;
+  v_observed text := 'INCONCLUSIVE';
   v_before text;
   v_after text;
   v_state text := '';
@@ -66,11 +66,28 @@ begin
   exception when others then
     get stacked diagnostics v_state = returned_sqlstate, v_message = message_text;
     if v_message <> '__QA_ROLLBACK__' then
-      v_observed := 'DENY';
+      v_observed := case
+        when v_state in ('42501','42503') then 'DENY'
+        when v_state = '23514' and v_message in (
+          'turma/disciplina incompatíveis na atribuicao',
+          'professor inativo ou inelegivel',
+          'SC003_R18_ENROLLMENT_MISMATCH',
+          'SC003_R31_DISCIPLINA_MISMATCH',
+          'material professor exige disciplina exata',
+          'turma fora do tenant do curso',
+          'professor do registro fora do tenant',
+          'disciplina fora do tenant do curso',
+          'turma fora do tenant da unidade',
+          'vinculo legado fora do tenant do professor/turma',
+          'matricula fora do tenant do curso'
+        ) then 'DENY'
+        when v_state = '23505' and v_message = 'duplicate key value violates unique constraint "professores_turmas_usuario_id_turma_id_key"' then 'DENY'
+        else 'INCONCLUSIVE'
+      end;
     end if;
   end;
   v_after := pg_temp.qa_scalar(p_state_sql);
-  if v_observed is null then v_observed := case when v_ok and v_rows > 0 then 'ALLOW' else 'DENY' end; end if;
+  if v_observed is null then v_observed := case when v_ok and v_rows > 0 then 'ALLOW' else 'INCONCLUSIVE' end; end if;
   perform pg_temp.qa_record(p_id,p_expected,v_observed,p_classification,v_before,v_after,
     p_detail || ' rows=' || v_rows || ' sqlstate=' || coalesce(v_state,'') || ' message=' || coalesce(v_message,''));
 end $$;
@@ -86,7 +103,7 @@ begin
   exception when others then
     get stacked diagnostics v_state = returned_sqlstate, v_message = message_text;
     v_count := -1;
-    v_observed := case when v_state = '42501' then 'DENY' else 'INCONCLUSIVE' end;
+    v_observed := case when v_state in ('42501','42503') then 'DENY' else 'INCONCLUSIVE' end;
   end;
   perform pg_temp.qa_record(p_id,p_expected,v_observed,p_classification,'','',p_detail || ' count=' || v_count || ' sqlstate=' || v_state || ' message=' || v_message);
 end $$;
@@ -102,7 +119,13 @@ begin
     raise exception using message = '__QA_ROLLBACK__';
   exception when others then
     get stacked diagnostics v_state = returned_sqlstate, v_message = message_text;
-    if v_message <> '__QA_ROLLBACK__' then v_observed := 'DENY'; end if;
+    if v_message <> '__QA_ROLLBACK__' then
+      v_observed := case
+        when v_state in ('42501','42503','23505') then 'DENY'
+        when v_message in ('Matrícula inválida para esta avaliação','Avaliação não encontrada','Avaliação ainda não está disponível','Limite de tentativas atingido','Esta etapa da coorte ainda não está disponível','A avaliação não possui questões ativas','Tentativa não encontrada','Tentativa já enviada','O prazo desta tentativa expirou','Questão inválida para esta tentativa') then 'DENY'
+        else 'INCONCLUSIVE'
+      end;
+    end if;
   end;
   perform pg_temp.qa_record(p_id,p_expected,v_observed,p_classification,'','',p_detail || ' sqlstate=' || v_state || ' message=' || v_message);
 end $$;
@@ -132,7 +155,10 @@ begin
     v_observed := case when coalesce(v_count,0) > 0 then 'ALLOW' else 'DENY' end;
   exception when others then
     get stacked diagnostics v_state = returned_sqlstate, v_message = message_text;
-    v_observed := 'DENY';
+    v_observed := case
+      when v_state in ('42501','42503') then 'DENY'
+      else 'INCONCLUSIVE'
+    end;
   end;
   reset role;
   execute p_state_sql into v_after;
@@ -165,7 +191,13 @@ begin
   exception when others then
     get stacked diagnostics v_state = returned_sqlstate, v_message = message_text;
     if v_message <> '__QA_ROLLBACK__' then
-      v_observed := case when v_state in ('42501','42503') then 'DENY' else 'INCONCLUSIVE' end;
+      v_observed := case
+        when v_state in ('42501','42503') then 'DENY'
+        when v_state = '23503' and v_message = 'update or delete on table "questoes" violates foreign key constraint "avaliacao_questoes_questao_id_fkey" on table "avaliacao_questoes"' then 'DENY'
+        when v_state = '23514' and v_message = 'A autoria da avaliação não pode ser transferida por um docente' then 'DENY'
+        when v_state = '23514' and v_message = 'Avaliação com evidência acadêmica não pode ter sua estrutura ou configuração alterada' then 'DENY'
+        else 'INCONCLUSIVE'
+      end;
     end if;
   end;
   reset role;
@@ -208,6 +240,7 @@ begin
       v_observed := case
         when v_phase = 'setup' then 'SETUP_ERROR'
         when v_state in ('42501','42503') then 'DENY'
+        when v_state = '23514' and v_message = 'Avaliação com evidência acadêmica não pode ter sua estrutura ou configuração alterada' then 'DENY'
         else 'INCONCLUSIVE'
       end;
     end if;
@@ -245,7 +278,7 @@ begin
     if v_message <> '__QA_ROLLBACK__' then
       v_observed := case
         when v_state in ('42501','42503') then 'DENY'
-        when v_message in ('Resposta não encontrada','Tentativa não encontrada','Avaliação não encontrada','Pontuação fora do limite da questão') then 'DENY'
+        when v_message in ('Resposta não encontrada','Tentativa não encontrada','Avaliação não encontrada','Professor sem assignment exato para corrigir resposta','Somente docentes podem corrigir respostas','Tentativa ainda não está enviada para correção','Tentativa mudou de estado durante a correção','Pontuação fora do limite da questão','Resposta já corrigida') then 'DENY'
         else 'INCONCLUSIVE'
       end;
     end if;
@@ -279,13 +312,56 @@ begin
     raise exception using message = '__QA_ROLLBACK__';
   exception when others then
     get stacked diagnostics v_state = returned_sqlstate, v_message = message_text;
-    if v_message <> '__QA_ROLLBACK__' then v_observed := 'DENY'; end if;
+    if v_message <> '__QA_ROLLBACK__' then
+      v_observed := case
+        when v_state in ('42501','42503') then 'DENY'
+        when v_message in ('Tentativa não encontrada','Tentativa já enviada','O prazo desta tentativa expirou','Questão inválida para esta tentativa') then 'DENY'
+        else 'INCONCLUSIVE'
+      end;
+    end if;
   end;
   reset role;
   execute p_state_sql into v_after;
   if v_before is distinct from v_after then v_observed := 'STATE_CHANGED'; end if;
   perform pg_temp.qa_record(p_id,p_expected,v_observed,p_classification,v_before,v_after,
     p_detail || ' sqlstate=' || v_state || ' message=' || v_message);
+end $$;
+
+
+-- Runtime ACL probe: owner-visible state is captured outside the role, while
+-- TRUNCATE is attempted as the exact application role. Unexpected errors are
+-- INCONCLUSIVE; only a successful truncate is ALLOW.
+create or replace function pg_temp.qa_probe_actor_truncate(
+  p_id text, p_expected text, p_classification text, p_detail text,
+  p_actor_role text, p_table text, p_state_sql text
+) returns void language plpgsql as $$
+declare
+  v_before text;
+  v_after text;
+  v_observed text := 'INCONCLUSIVE';
+  v_state text := '';
+  v_message text := '';
+begin
+  reset role;
+  execute p_state_sql into v_before;
+  begin
+    execute format('set local role %I', p_actor_role);
+    execute format('truncate table public.%I', p_table);
+    v_observed := 'ALLOW';
+    raise exception using message = '__QA_ROLLBACK__';
+  exception when others then
+    get stacked diagnostics v_state = returned_sqlstate, v_message = message_text;
+    if v_message <> '__QA_ROLLBACK__' then
+      v_observed := case when v_state in ('42501','42503') then 'DENY' else 'INCONCLUSIVE' end;
+    end if;
+  end;
+  reset role;
+  execute p_state_sql into v_after;
+  if v_before is distinct from v_after then v_observed := 'STATE_CHANGED'; end if;
+  perform pg_temp.qa_record(
+    p_id,p_expected,v_observed,p_classification,v_before,v_after,
+    p_detail || ' sqlstate=' || coalesce(v_state,'') || ' message=' || coalesce(v_message,'')
+  );
 end $$;
 
 -- Deterministic artificial identities and School A/B fixture. All IDs are QA-only.
@@ -435,8 +511,31 @@ insert into public.avaliacao_questoes(avaliacao_id,questao_id,ordem) values
  ('ac000000-0000-0000-0000-000000000008','aa000000-0000-0000-0000-000000000005',1);
 insert into public.avaliacao_tentativas(id,tenant_id,avaliacao_id,matricula_id,usuario_id,numero_tentativa,questoes_ordem,gabarito_snapshot) values
  ('ad000000-0000-0000-0000-000000000004','a1000000-0000-0000-0000-000000000001','ac000000-0000-0000-0000-000000000008','a8000000-0000-0000-0000-000000000001','a4000000-0000-0000-0000-000000000010',1,'[{"questao_id":"aa000000-0000-0000-0000-000000000005","pontos":1}]','{"aa000000-0000-0000-0000-000000000005":"a"}');
+update public.avaliacao_tentativas
+set situacao='enviada', enviada_em=now()
+where id in ('ad000000-0000-0000-0000-000000000002','ad000000-0000-0000-0000-000000000004');
 insert into public.avaliacao_respostas(id,tenant_id,tentativa_id,questao_id) values
  ('ae000000-0000-0000-0000-000000000004','a1000000-0000-0000-0000-000000000001','ad000000-0000-0000-0000-000000000004','aa000000-0000-0000-0000-000000000005');
+
+
+-- R5.2 dedicated submitted dissertative fixture. Every B2 authorization
+-- probe below uses this valid `enviada` response, so lifecycle cannot provide
+-- the denial. The unlinked question is the X11 owner-delete control.
+reset role;
+insert into public.questoes(id,tenant_id,disciplina_id,enunciado,tipo,resposta_correta,resposta_esperada,criado_por) values
+ ('aa000000-0000-0000-0000-000000000007','a1000000-0000-0000-0000-000000000001','a6000000-0000-0000-0000-000000000001','QA R5.2 submitted dissertative question','dissertativa',null,'QA expected answer','a4000000-0000-0000-0000-000000000002'),
+ ('aa000000-0000-0000-0000-000000000008','a1000000-0000-0000-0000-000000000001','a6000000-0000-0000-0000-000000000001','QA R5.2 unlinked owner-delete question','objetiva','a',null,'a4000000-0000-0000-0000-000000000002'),
+ ('bb000000-0000-0000-0000-000000000003','b1000000-0000-0000-0000-000000000001','b6000000-0000-0000-0000-000000000001','QA R5.2 unlinked Tenant B mutation target','objetiva','a',null,'b4000000-0000-0000-0000-000000000001');
+insert into public.avaliacoes(id,tenant_id,curso_id,disciplina_id,turma_id,titulo,situacao,criado_por) values
+ ('ac000000-0000-0000-0000-000000000020','a1000000-0000-0000-0000-000000000001','a5000000-0000-0000-0000-000000000001','a6000000-0000-0000-0000-000000000001','a7000000-0000-0000-0000-000000000003','QA R5.2 submitted dissertative assessment','publicada','a4000000-0000-0000-0000-000000000002');
+insert into public.avaliacoes(id,tenant_id,curso_id,disciplina_id,turma_id,titulo,situacao,criado_por) values
+ ('ac000000-0000-0000-0000-000000000021','a1000000-0000-0000-0000-000000000001','a5000000-0000-0000-0000-000000000001','a6000000-0000-0000-0000-000000000001','a7000000-0000-0000-0000-000000000003','QA R5.2 unused assessment','rascunho','a4000000-0000-0000-0000-000000000002');
+insert into public.avaliacao_questoes(avaliacao_id,questao_id,ordem,tenant_id) values
+ ('ac000000-0000-0000-0000-000000000020','aa000000-0000-0000-0000-000000000007',1,'a1000000-0000-0000-0000-000000000001');
+insert into public.avaliacao_tentativas(id,tenant_id,avaliacao_id,matricula_id,usuario_id,numero_tentativa,situacao,enviada_em,questoes_ordem,gabarito_snapshot) values
+ ('ad000000-0000-0000-0000-000000000020','a1000000-0000-0000-0000-000000000001','ac000000-0000-0000-0000-000000000020','a8000000-0000-0000-0000-000000000003','a4000000-0000-0000-0000-000000000012',1,'enviada',now(),'[{"questao_id":"aa000000-0000-0000-0000-000000000007","pontos":1}]','{}');
+insert into public.avaliacao_respostas(id,tenant_id,tentativa_id,questao_id,resposta_texto) values
+ ('ae000000-0000-0000-0000-000000000020','a1000000-0000-0000-0000-000000000001','ad000000-0000-0000-0000-000000000020','aa000000-0000-0000-0000-000000000007','QA submitted answer');
 
 insert into public.materiais_professor(id,tenant_id,turma_id,disciplina_id,professor_id,titulo,url) values
  ('af000000-0000-0000-0000-000000000001','a1000000-0000-0000-0000-000000000001','a7000000-0000-0000-0000-000000000003','a6000000-0000-0000-0000-000000000001','a4000000-0000-0000-0000-000000000002','QA material Math','https://qa.invalid/math'),
@@ -534,7 +633,7 @@ select pg_temp.qa_probe_dml('A30','DENY','LEGACY_COMPATIBILITY_ONLY','No approve
 -- A31–A35 assessments.
 select pg_temp.qa_probe_dml('A31','ALLOW','CURRENT REPOSITORY CONTRACT','Teacher A can create a Math question as tenant-wide docente; rolled back','insert into public.questoes(id,tenant_id,disciplina_id,enunciado,alternativas,resposta_correta,criado_por) values (''aa000000-0000-0000-0000-000000000010'',''a1000000-0000-0000-0000-000000000001'',''a6000000-0000-0000-0000-000000000001'',''QA new question'',''[{"id":"a"}]'',''a'',''a4000000-0000-0000-0000-000000000002'')','select count(*)::text from public.questoes where id=''aa000000-0000-0000-0000-000000000010''');
 select pg_temp.qa_probe_dml('A32','DENY','CURRENT REPOSITORY CONTRACT','Teacher A can create a Chemistry assessment without exact assignment; rolled back','insert into public.avaliacoes(id,tenant_id,curso_id,disciplina_id,turma_id,titulo,situacao,criado_por) values (''ac000000-0000-0000-0000-000000000010'',''a1000000-0000-0000-0000-000000000001'',''a5000000-0000-0000-0000-000000000001'',''a6000000-0000-0000-0000-000000000003'',''a7000000-0000-0000-0000-000000000003'',''QA new Chemistry assessment'',''rascunho'',''a4000000-0000-0000-0000-000000000002'')','select count(*)::text from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000010''');
-select pg_temp.qa_probe_dml('A33','DENY','CURRENT REPOSITORY CONTRACT','Assessment-question policy allows same-tenant Subject mismatch; rolled back','insert into public.avaliacao_questoes(avaliacao_id,questao_id,ordem) values (''a1000000-0000-0000-0000-000000000001'',''ac000000-0000-0000-0000-000000000008'',''aa000000-0000-0000-0000-000000000005'',2)','select count(*)::text from public.avaliacao_questoes where avaliacao_id=''ac000000-0000-0000-0000-000000000008'' and questao_id=''aa000000-0000-0000-0000-000000000005''');
+select pg_temp.qa_probe_dml('A33','DENY','CURRENT REPOSITORY CONTRACT','Assessment-question policy allows same-tenant Subject mismatch; rolled back','insert into public.avaliacao_questoes(avaliacao_id,questao_id,ordem,tenant_id) values (''ac000000-0000-0000-0000-000000000001'',''aa000000-0000-0000-0000-000000000002'',2,''a1000000-0000-0000-0000-000000000001'')','select count(*)::text from public.avaliacao_questoes where avaliacao_id=''ac000000-0000-0000-0000-000000000001'' and questao_id=''aa000000-0000-0000-0000-000000000002''');
 select pg_temp.qa_probe_dml('A34','DENY','CURRENT REPOSITORY CONTRACT','Teacher A cannot directly correct a Physics response; grading must use the validated RPC','update public.avaliacao_respostas set pontos_obtidos=1,corrigida=true where id=''ae000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000000001'' and corrigida=false');
 select pg_temp.qa_probe_dml('A35','DENY','CURRENT REPOSITORY CONTRACT','Teacher A can correct 7A Physics despite no subject-specific assignment; rolled back','update public.avaliacao_respostas set pontos_obtidos=1,corrigida=true where id=''ae000000-0000-0000-0000-000000000002''','select count(*)::text from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000000002'' and corrigida=false');
 
@@ -669,12 +768,39 @@ select pg_temp.qa_probe_actor_dml('R4-H1-X-UPDATE-ANSWER','DENY','BLOCKING H1 QU
 select pg_temp.qa_probe_actor_dml('R4-H1-X-UPDATE-TEXT','DENY','BLOCKING H1 QUESTION AUTHORITY','Teacher X cannot rewrite enunciado on Teacher Y question','a3000000-0000-0000-0000-000000000005','update public.questoes set enunciado=''QA forbidden rewrite'' where id=''aa000000-0000-0000-0000-000000000005''','select enunciado from public.questoes where id=''aa000000-0000-0000-0000-000000000005''');
 select pg_temp.qa_probe_actor_dml('R4-H1-X-UPDATE-COMBINED','DENY','BLOCKING H1 QUESTION AUTHORITY','Teacher X cannot combine self criado_por with answer-key/text mutation','a3000000-0000-0000-0000-000000000005','update public.questoes set criado_por=''a4000000-0000-0000-0000-000000000005'', resposta_correta=''b'', enunciado=''QA forbidden combined rewrite'' where id=''aa000000-0000-0000-0000-000000000005''','select criado_por::text||''|''||resposta_correta||''|''||enunciado from public.questoes where id=''aa000000-0000-0000-0000-000000000005''');
 select pg_temp.qa_probe_actor_dml('R4-H1-X-DELETE','DENY','BLOCKING H1 QUESTION AUTHORITY','Teacher X cannot DELETE the assessment-bound Teacher Y question','a3000000-0000-0000-0000-000000000005','delete from public.questoes where id=''aa000000-0000-0000-0000-000000000005''','select count(*)::text from public.questoes where id=''aa000000-0000-0000-0000-000000000005''');
-select pg_temp.qa_probe_actor_dml('R4-H1-Y-POSITIVE','ALLOW','BLOCKING H1 QUESTION AUTHORITY','Teacher Y can mutate the question through its exact 7A Math assessment authority','a3000000-0000-0000-0000-000000000006','update public.questoes set enunciado=''QA Teacher Y allowed edit'' where id=''aa000000-0000-0000-0000-000000000005''','select enunciado from public.questoes where id=''aa000000-0000-0000-0000-000000000005''');
+select pg_temp.qa_probe_actor_dml('R4-H1-Y-POSITIVE','DENY','BLOCKING ACADEMIC EVIDENCE IMMUTABILITY','Teacher Y cannot mutate a question after its assessment has evidence','a3000000-0000-0000-0000-000000000006','update public.questoes set enunciado=''QA Teacher Y forbidden post-evidence edit'' where id=''aa000000-0000-0000-0000-000000000005''','select enunciado from public.questoes where id=''aa000000-0000-0000-0000-000000000005''');
 
 -- Same-tenant staff positive DML and cross-tenant staff denial.
 select pg_temp.qa_probe_actor_dml('R4-STAFF-INSERT-Q','ALLOW','BLOCKING SAME-TENANT STAFF','Staff A can INSERT an unlinked question in Tenant A','a3000000-0000-0000-0000-000000000001','insert into public.questoes(id,tenant_id,disciplina_id,enunciado,alternativas,resposta_correta,criado_por) values (''aa000000-0000-0000-0000-000000000020'',''a1000000-0000-0000-0000-000000000001'',''a6000000-0000-0000-0000-000000000001'',''QA staff insert'',''[{"id":"a"}]'',''a'',''a4000000-0000-0000-0000-000000000001'')','select count(*)::text from public.questoes where id=''aa000000-0000-0000-0000-000000000020''');
 select pg_temp.qa_probe_actor_dml('R4-STAFF-UPDATE-Q','ALLOW','BLOCKING SAME-TENANT STAFF','Staff A can UPDATE its Tenant A question','a3000000-0000-0000-0000-000000000001','update public.questoes set enunciado=''QA staff allowed edit'' where id=''aa000000-0000-0000-0000-000000000006''','select enunciado from public.questoes where id=''aa000000-0000-0000-0000-000000000006''');
 select pg_temp.qa_probe_actor_dml('R4-STAFF-DELETE-Q','ALLOW','BLOCKING SAME-TENANT STAFF','Staff A can DELETE its Tenant A question','a3000000-0000-0000-0000-000000000001','delete from public.questoes where id=''aa000000-0000-0000-0000-000000000006''','select count(*)::text from public.questoes where id=''aa000000-0000-0000-0000-000000000006''');
+
+
+
+-- R5.2-B5: co-assigned Teacher cannot manufacture ownership or rewrite
+-- assessment-bound content; evidence freezes configuration and parent rows.
+select pg_temp.qa_probe_actor_dml('R52-QUESTION-TAKEOVER','DENY','BLOCKING OWNERSHIP PROVENANCE','Teacher Exact shares 8A Math but cannot change the creator of Teacher A question','a3000000-0000-0000-0000-000000000005','update public.questoes set criado_por=''a4000000-0000-0000-0000-000000000005'' where id=''aa000000-0000-0000-0000-000000000001''','select criado_por::text from public.questoes where id=''aa000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R52-QUESTION-COMBINED-TAKEOVER','DENY','BLOCKING OWNERSHIP PROVENANCE','Teacher Exact cannot combine creator takeover with answer-key/text mutation','a3000000-0000-0000-0000-000000000005','update public.questoes set criado_por=''a4000000-0000-0000-0000-000000000005'',enunciado=''QA forged question'',resposta_correta=''b'' where id=''aa000000-0000-0000-0000-000000000001''','select criado_por::text||''|''||resposta_correta||''|''||enunciado from public.questoes where id=''aa000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R52-ASSESSMENT-TAKEOVER','DENY','BLOCKING OWNERSHIP PROVENANCE','Teacher Exact cannot take over the creator of a shared assessment','a3000000-0000-0000-0000-000000000005','update public.avaliacoes set criado_por=''a4000000-0000-0000-0000-000000000005'',titulo=''QA forged assessment'' where id=''ac000000-0000-0000-0000-000000000001''','select criado_por::text||''|''||titulo from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R52-ASSESSMENT-POST-EVIDENCE','DENY','BLOCKING ACADEMIC EVIDENCE IMMUTABILITY','Staff cannot change assessment grading configuration after an attempt exists','a3000000-0000-0000-0000-000000000001','update public.avaliacoes set nota_minima=99 where id=''ac000000-0000-0000-0000-000000000001''','select nota_minima::text from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R52-AQ-POST-EVIDENCE','DENY','BLOCKING ACADEMIC EVIDENCE IMMUTABILITY','Staff cannot reorder assessment questions after an attempt exists','a3000000-0000-0000-0000-000000000001','update public.avaliacao_questoes set ordem=9 where avaliacao_id=''ac000000-0000-0000-0000-000000000001'' and questao_id=''aa000000-0000-0000-0000-000000000001''','select ordem::text from public.avaliacao_questoes where avaliacao_id=''ac000000-0000-0000-0000-000000000001'' and questao_id=''aa000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R52-MATRICULA-CASCADE','DENY','BLOCKING ACADEMIC EVIDENCE RETENTION','Staff cannot delete a matricula whose attempts would cascade','a3000000-0000-0000-0000-000000000001','delete from public.matriculas where id=''a8000000-0000-0000-0000-000000000003''','select count(*)::text from public.avaliacao_tentativas where matricula_id=''a8000000-0000-0000-0000-000000000003''');
+select pg_temp.qa_probe_actor_dml('R52-USUARIO-CASCADE','DENY','BLOCKING ACADEMIC EVIDENCE RETENTION','Staff cannot delete a student whose attempts would cascade','a3000000-0000-0000-0000-000000000001','delete from public.usuarios where id=''a4000000-0000-0000-0000-000000000012''','select count(*)::text from public.avaliacao_tentativas where usuario_id=''a4000000-0000-0000-0000-000000000012''');
+select pg_temp.qa_probe_actor_dml('R52-ASSESSMENT-UNUSED-DELETE','ALLOW','BLOCKING ASSESSMENT DELETE AUTHORITY','Same-tenant staff can delete an assessment with no academic evidence','a3000000-0000-0000-0000-000000000001','delete from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000021''','select count(*)::text from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000021''');
+select pg_temp.qa_probe_actor_dml('R52-ASSESSMENT-EVIDENCE-DELETE','DENY','BLOCKING ACADEMIC EVIDENCE RETENTION','Same-tenant staff cannot delete an assessment with attempt evidence','a3000000-0000-0000-0000-000000000001','delete from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R52-QUESTION-EVIDENCE-DELETE','DENY','BLOCKING ACADEMIC EVIDENCE RETENTION','Same-tenant staff cannot delete a question referenced by academic evidence','a3000000-0000-0000-0000-000000000001','delete from public.questoes where id=''aa000000-0000-0000-0000-000000000001''','select count(*)::text from public.questoes where id=''aa000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml('R52-QUESTION-OWNER-DELETE','DENY','BLOCKING OWNERSHIP DELETE AUTHORITY','Teacher Exact cannot delete an unlinked question owned by Teacher A','a3000000-0000-0000-0000-000000000005','delete from public.questoes where id=''aa000000-0000-0000-0000-000000000008''','select count(*)::text from public.questoes where id=''aa000000-0000-0000-0000-000000000008''');
+
+-- R5.2-B2: every authorization denial below operates on a valid `enviada`
+-- dissertative response, with lifecycle no longer able to explain the result.
+select pg_temp.qa_probe_actor_rpc('R52-GRADE-POSITIVE','ALLOW','BLOCKING GRADING AUTHORITY','Teacher Exact grades a valid submitted 8A Math response','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,1,''QA R5.2 positive grading'')','select situacao::text||'':''||corrigida::text||'':''||pontos_obtidos::text from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
+select pg_temp.qa_probe_actor_rpc('R52-GRADE-STUDENT','DENY','BLOCKING GRADING AUTHORITY','Student cannot grade a valid submitted response','a3000000-0000-0000-0000-000000000012','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,1,''QA student grading'')','select situacao::text||'':''||corrigida::text from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
+select pg_temp.qa_probe_actor_rpc('R52-GRADE-REVOKED-TEACHER','DENY','BLOCKING GRADING AUTHORITY','Revoked Teacher A cannot grade a submitted Physics response','a3000000-0000-0000-0000-000000000002','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000001''::uuid,1,''QA revoked grading'')','select situacao::text||'':''||corrigida::text from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_rpc('R52-GRADE-WRONG-CLASS','DENY','BLOCKING GRADING AUTHORITY','Teacher Exact cannot grade a submitted 7A Math response','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000004''::uuid,1,''QA wrong class grading'')','select situacao::text||'':''||corrigida::text from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000004''');
+select pg_temp.qa_probe_actor_rpc('R52-GRADE-WRONG-SUBJECT','DENY','BLOCKING GRADING AUTHORITY','Teacher Exact cannot grade a submitted 8A Physics response','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000001''::uuid,1,''QA wrong subject grading'')','select situacao::text||'':''||corrigida::text from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_rpc('R52-GRADE-TEACHER-B','DENY','BLOCKING GRADING AUTHORITY','Tenant B Teacher cannot grade Tenant A submitted response','b3000000-0000-0000-0000-000000000001','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,1,''QA Teacher B grading'')','select situacao::text||'':''||corrigida::text from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
+select pg_temp.qa_probe_actor_rpc('R52-GRADE-STAFF-B','DENY','BLOCKING GRADING AUTHORITY','Tenant B Staff cannot grade Tenant A submitted response','b3000000-0000-0000-0000-000000000002','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,1,''QA Staff B grading'')','select situacao::text||'':''||corrigida::text from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
+select pg_temp.qa_probe_actor_rpc('R52-GRADE-FORGED-ID','DENY','BLOCKING GRADING AUTHORITY','Teacher Exact cannot grade a forged response identifier','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000009999''::uuid,1,''QA forged grading id'')','select count(*)::text from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000009999''');
 
 -- R4 M1: direct table writes are not a grading path.
 select pg_temp.qa_probe_actor_dml('R4-M1-UPDATE-SCORE','DENY','BLOCKING DIRECT GRADING WRITE','Teacher X cannot UPDATE pontos_obtidos directly','a3000000-0000-0000-0000-000000000005','update public.avaliacao_respostas set pontos_obtidos=999 where id=''ae000000-0000-0000-0000-000000000003''','select pontos_obtidos::text from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000000003''');
@@ -815,6 +941,21 @@ select set_config('request.jwt.claim.sub','a3000000-0000-0000-0000-000000000002'
 select pg_temp.qa_probe_count('RPC-minhas-turmas-professor','ALLOW','CURRENT REPOSITORY CONTRACT','Teacher RPC is class/course-only and does not return Subject/assignment context','select count(*) from public.minhas_turmas_professor()');
 select set_config('request.jwt.claim.sub','a3000000-0000-0000-0000-000000000010',false);
 select pg_temp.qa_probe_rpc('RPC-student-start-wrong-class','DENY','CURRENT REPOSITORY CONTRACT','Student 7A can attempt an 8A evaluation from the same Course because start RPC checks Course but not Class','select public.iniciar_tentativa_avaliacao(''ac000000-0000-0000-0000-000000000001''::uuid,''a8000000-0000-0000-0000-000000000001''::uuid)');
+
+
+-- R5.2-B4: schema provenance and runtime attempts for both application roles.
+select pg_temp.qa_record('R52-TRUNCATE-ACL','ALLOW',case when
+  has_table_privilege('anon','public.avaliacao_respostas','TRUNCATE') = false
+  and has_table_privilege('authenticated','public.avaliacao_respostas','TRUNCATE') = false
+  and has_table_privilege('anon','public.avaliacao_tentativas','TRUNCATE') = false
+  and has_table_privilege('authenticated','public.avaliacao_tentativas','TRUNCATE') = false
+  and has_table_privilege('anon','public.avaliacoes','TRUNCATE') = false
+  and has_table_privilege('authenticated','public.avaliacoes','TRUNCATE') = false
+then 'ALLOW' else 'DENY' end,'BLOCKING TRUNCATE ACL','', '', 'TRUNCATE is absent for anon/authenticated on evidence tables');
+select pg_temp.qa_probe_actor_truncate('R52-TRUNCATE-AUTH-RESP','DENY','BLOCKING TRUNCATE ACL','authenticated cannot truncate response evidence','authenticated','avaliacao_respostas','select count(*)::text from public.avaliacao_respostas');
+select pg_temp.qa_probe_actor_truncate('R52-TRUNCATE-ANON-RESP','DENY','BLOCKING TRUNCATE ACL','anon cannot truncate response evidence','anon','avaliacao_respostas','select count(*)::text from public.avaliacao_respostas');
+select pg_temp.qa_probe_actor_truncate('R52-TRUNCATE-AUTH-ATTEMPT','DENY','BLOCKING TRUNCATE ACL','authenticated cannot truncate attempt evidence','authenticated','avaliacao_tentativas','select count(*)::text from public.avaliacao_tentativas');
+select pg_temp.qa_probe_actor_truncate('R52-TRUNCATE-ANON-ASSESSMENT','DENY','BLOCKING TRUNCATE ACL','anon cannot truncate assessments','anon','avaliacoes','select count(*)::text from public.avaliacoes');
 
 -- Restore role and emit all results. Fixture remains disposable and is removed by dropping the QA database.
 reset role;
