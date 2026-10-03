@@ -81,6 +81,20 @@ jobs:
       - name: Bootstrap disposable Supabase compatibility schemas
         run: psql -v ON_ERROR_STOP=1 -f tests/payments/sql/bootstrap.sql
 
+      - name: Configure Supabase-faithful public default privileges
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Reproduce the dangerous default-ACL class found by the audit;
+          # migration 049 must explicitly remove it from School Core roles.
+          psql -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          GRANT CONNECT, CREATE ON DATABASE kora_ci TO postgres;
+          GRANT USAGE, CREATE ON SCHEMA public TO postgres;
+          ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+            GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES
+            ON TABLES TO anon, authenticated;
+          SQL
+
       - name: Validate and replay canonical migrations
         shell: bash
         run: |
@@ -122,13 +136,13 @@ jobs:
           set -euo pipefail
           export LC_ALL=C
           db=kora_sc004_r5_hb1
-          cleanup() { dropdb --if-exists -U supabase_admin "$db" >/dev/null 2>&1; }
+          cleanup() { dropdb --if-exists -U postgres "$db" >/dev/null 2>&1; }
           trap cleanup EXIT
           # HB1 must start from a truly pristine database. Cloning kora_ci here
           # would replay 001-039 on an already migrated template and fail on
           # pre-existing objects before the 040 preflight is exercised.
-          dropdb --if-exists -U supabase_admin "$db" >/dev/null 2>&1 || true
-          createdb -U supabase_admin --template=template0 "$db"
+          dropdb --if-exists -U postgres "$db" >/dev/null 2>&1 || true
+          createdb -U postgres --owner=supabase_admin --template=template0 "$db"
           export PGDATABASE="$db"
 
           # Recreate only the disposable Supabase compatibility layer that the
@@ -155,6 +169,13 @@ jobs:
           GRANT USAGE, CREATE ON SCHEMA public TO postgres;
           GRANT USAGE, CREATE ON SCHEMA storage TO supabase_storage_admin;
           GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+          GRANT CONNECT, CREATE ON DATABASE "$db" TO postgres;
+          GRANT USAGE, CREATE ON SCHEMA public TO postgres;
+          GRANT USAGE ON SCHEMA auth TO postgres;
+          GRANT SELECT, REFERENCES ON auth.users TO postgres;
+          ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+            GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES
+            ON TABLES TO anon, authenticated;
           SQL
 
           pristine_public_tables=$(psql -U postgres -At -c "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p');")
