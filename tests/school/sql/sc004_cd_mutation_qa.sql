@@ -274,12 +274,15 @@ BEGIN
 END
 $$;
 
--- M12 — X7b: remove only the parent evidence trigger. The same normal
+-- M12 — X7b: same expected name, wrong event. The same normal
 -- catalog/effectiveness assertion must fail, then pass after rollback.
 BEGIN;
 select pg_temp.qa_probe_evidence_trigger('M12-BASELINE');
 select pg_temp.qa_expect_result('M12-BASELINE','PASS');
 DROP TRIGGER trg_sc004_assessment_evidence_delete ON public.avaliacoes;
+CREATE TRIGGER trg_sc004_assessment_evidence_delete
+  BEFORE UPDATE ON public.avaliacoes
+  FOR EACH ROW EXECUTE FUNCTION public.sc004_block_assessment_evidence_delete();
 select pg_temp.qa_probe_evidence_trigger('M12-MUTATED');
 select pg_temp.qa_expect_mutation_state('M12-MUTATED','ABSENT');
 DELETE FROM qa_results WHERE id='M12-MUTATED';
@@ -405,7 +408,7 @@ select pg_temp.qa_expect_result('M20-BASELINE','PASS');
 BEGIN;
 DO $do$
 BEGIN
-PERFORM dblink_connect('sc004_r53_mutator','dbname='||current_database());
+PERFORM dblink_connect('sc004_r53_mutator',pg_temp.qa_dblink_conninfo());
 PERFORM dblink_exec('sc004_r53_mutator',$ddl$CREATE OR REPLACE FUNCTION public.enviar_tentativa_avaliacao(p_tentativa_id uuid,p_respostas jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''
 AS $$
@@ -435,7 +438,7 @@ insert into public.avaliacao_tentativas(
 select pg_temp.qa_probe_submit_serialization('M20-MUTATED','ad000000-0000-0000-0000-000000000014'::uuid,5);
 select pg_temp.qa_expect_mutation_state('M20-MUTATED','UNSAFE_CONCURRENT_SUCCESS');
 DELETE FROM qa_results WHERE id='M20-MUTATED';
-\i supabase/migrations/049_kora_school_sc004_security_remediation.sql
+\i supabase/migrations/050_kora_school_sc004_r54_deterministic_c1.sql
 select pg_temp.qa_record('M20-ROLLBACK','LOCKED',CASE WHEN pg_get_functiondef('public.enviar_tentativa_avaliacao(uuid,jsonb)'::regprocedure) LIKE '%FOR UPDATE%' THEN 'LOCKED' ELSE 'UNLOCKED' END,'MUTATION ROLLBACK ASSERTION','','','RPC lock restored by 049');
 select pg_temp.qa_expect_result('M20-ROLLBACK','PASS');
 \echo 'M20_SUBMISSION_SERIALIZATION_KILLED: PASS'
@@ -450,7 +453,7 @@ DELETE FROM qa_results WHERE id='M21-ZERO-ROW';
 
 -- M22 — point bounds. Keep actor scope and submitted lifecycle intact; the
 -- disposable replacement removes only the p_pontos range check.
-select pg_temp.qa_probe_actor_rpc('M22-BASELINE','DENY','MUTATION NORMAL ASSERTION','Authorized Teacher Exact rejects above-maximum points on the same submitted response','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,999,''M22 baseline high points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
+select pg_temp.qa_probe_actor_rpc('M22-BASELINE','DENY','MUTATION NORMAL ASSERTION','Authorized Teacher Exact rejects above-maximum points on the same submitted response','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,101,''M22 baseline high points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
 select pg_temp.qa_expect_result('M22-BASELINE','PASS');
 BEGIN;
 CREATE OR REPLACE FUNCTION public.corrigir_resposta_avaliacao(p_resposta_id uuid,p_pontos numeric,p_comentario text DEFAULT NULL)
@@ -477,10 +480,29 @@ BEGIN
   RETURN jsonb_build_object('tentativa_id',v_t.id,'situacao','corrigida');
 END
 $$;
-select pg_temp.qa_probe_actor_rpc('M22-MUTATED','DENY','MUTATION NORMAL ASSERTION','The same above-maximum assertion after only point-bound removal','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,999,''M22 mutated high points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
+select pg_temp.qa_probe_actor_rpc('M22-MUTATED','DENY','MUTATION NORMAL ASSERTION','The same above-maximum assertion after only point-bound removal','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,101,''M22 mutated high points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
 select pg_temp.qa_expect_mutation('M22-MUTATED');
 DELETE FROM qa_results WHERE id='M22-MUTATED';
+select pg_temp.qa_probe_actor_rpc('M23-MUTATED','DENY','MUTATION NORMAL ASSERTION','The same negative-point assertion after only point-bound removal','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,-1,''M23 mutated negative points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
+select pg_temp.qa_expect_mutation('M23-MUTATED');
+DELETE FROM qa_results WHERE id='M23-MUTATED';
 ROLLBACK;
-select pg_temp.qa_probe_actor_rpc('M22-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Above-maximum points are denied again after point-bound rollback','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,999,''M22 rollback high points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
+select pg_temp.qa_probe_actor_rpc('M22-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Above-maximum points are denied again after point-bound rollback','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,101,''M22 rollback high points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
 select pg_temp.qa_expect_result('M22-ROLLBACK','PASS');
-\echo 'M22_POINT_BOUNDS_KILLED: PASS'
+select pg_temp.qa_probe_actor_rpc('M23-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Negative points are denied again after point-bound rollback','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,-1,''M23 rollback negative points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
+select pg_temp.qa_expect_result('M23-ROLLBACK','PASS');
+\echo 'M22_M23_POINT_BOUNDS_KILLED: PASS'
+
+-- M24 — L4 trigger-only helper EXECUTE surface.
+select pg_temp.qa_probe_l4_execute('M24-BASELINE');
+select pg_temp.qa_expect_result('M24-BASELINE','PASS');
+BEGIN;
+GRANT EXECUTE ON FUNCTION public.sc004_assignment_lifecycle() TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.sc004_validate_parent_integrity() TO anon, authenticated;
+select pg_temp.qa_probe_l4_execute('M24-MUTATED');
+select pg_temp.qa_expect_mutation('M24-MUTATED');
+DELETE FROM qa_results WHERE id='M24-MUTATED';
+ROLLBACK;
+select pg_temp.qa_probe_l4_execute('M24-ROLLBACK');
+select pg_temp.qa_expect_result('M24-ROLLBACK','PASS');
+\echo 'M24_TRIGGER_EXECUTE_ACL_KILLED: PASS'

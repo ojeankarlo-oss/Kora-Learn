@@ -1102,6 +1102,43 @@ SELECT pg_temp.qa_record(
   'enviar_tentativa_avaliacao has search_path=""'
 );
 
+SELECT pg_temp.qa_record(
+  'R54-C1-BUILTIN-BINDING','SAFE',
+  CASE WHEN (
+    SELECT pg_get_functiondef('public.iniciar_tentativa_avaliacao(uuid,uuid)'::regprocedure)
+      LIKE '%v_usuario_id pg_catalog.uuid%'
+      AND pg_get_functiondef('public.iniciar_tentativa_avaliacao(uuid,uuid)'::regprocedure)
+        LIKE '%pg_catalog.jsonb_array_elements%'
+      AND pg_get_functiondef('public.enviar_tentativa_avaliacao(uuid,jsonb)'::regprocedure)
+        LIKE '%v_item pg_catalog.jsonb%'
+      AND pg_get_functiondef('public.enviar_tentativa_avaliacao(uuid,jsonb)'::regprocedure)
+        LIKE '%v_pontos pg_catalog.numeric%'
+  ) THEN 'SAFE' ELSE 'UNSAFE' END,
+  'BLOCKING SECURITY DEFINER SHADOW','','',
+  'C1 built-in types and array/json functions are explicitly bound to pg_catalog'
+);
+
+CREATE OR REPLACE FUNCTION pg_temp.qa_probe_l4_execute(p_id text)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_observed text;
+BEGIN
+  v_observed := CASE WHEN
+    NOT has_function_privilege('anon','public.sc004_assignment_lifecycle()','EXECUTE')
+    AND NOT has_function_privilege('authenticated','public.sc004_assignment_lifecycle()','EXECUTE')
+    AND NOT has_function_privilege('anon','public.sc004_validate_parent_integrity()','EXECUTE')
+    AND NOT has_function_privilege('authenticated','public.sc004_validate_parent_integrity()','EXECUTE')
+    THEN 'DENY' ELSE 'ALLOW' END;
+  PERFORM pg_temp.qa_record(
+    p_id,'DENY',v_observed,'BLOCKING TRIGGER FUNCTION EXECUTE ACL','','',
+    'anon/authenticated have no direct EXECUTE on trigger-only helpers'
+  );
+END
+$$;
+SELECT pg_temp.qa_probe_l4_execute('R54-L4-TRIGGER-EXECUTE');
+
 -- C2: inventory and runtime attacks. These are explicit checks, not RLS claims.
 SELECT pg_temp.qa_record(
   'R53-C2-ACL-INVENTORY','ALLOW',
@@ -1135,11 +1172,12 @@ select pg_temp.qa_probe_actor_truncate('R53-C2-AUTH-PRESENCE','DENY','BLOCKING T
 -- Point-bound cleanup: this response is seeded as enviada and is reached by
 -- Teacher Exact's valid 8A + Math assignment before bounds are evaluated.
 select pg_temp.qa_probe_actor_rpc('R53-POINT-LOW','DENY','BLOCKING GRADING POINT BOUNDS','Authorized Teacher Exact rejects negative points on an already submitted response','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,-1,''R53 negative points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
-select pg_temp.qa_probe_actor_rpc('R53-POINT-HIGH','DENY','BLOCKING GRADING POINT BOUNDS','Authorized Teacher Exact rejects points above question maximum on an already submitted response','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,999,''R53 high points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
+select pg_temp.qa_probe_actor_rpc('R53-POINT-HIGH','DENY','BLOCKING GRADING POINT BOUNDS','Authorized Teacher Exact rejects points above question maximum on an already submitted response','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,101,''R53 high points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
 select pg_temp.qa_probe_actor_rpc('R53-POINT-VALID','ALLOW','BLOCKING GRADING POINT BOUNDS','Authorized Teacher Exact accepts an in-range point value on an already submitted response','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,1,''R53 valid points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
 
 -- X7b: direct privileged maintenance invariant. RLS is not used as evidence;
--- the catalog trigger and its intended evidence-denial error are both checked.
+-- trigger relation, timing, event and function target are checked before the
+-- behavioral denial probe; a same-name wrong-event trigger must be detected.
 CREATE OR REPLACE FUNCTION pg_temp.qa_probe_evidence_trigger(p_id text)
 RETURNS void
 LANGUAGE plpgsql
@@ -1154,10 +1192,17 @@ DECLARE
 BEGIN
   RESET ROLE;
   SELECT EXISTS (
-    SELECT 1 FROM pg_trigger
-    WHERE tgrelid='public.avaliacoes'::regclass
-      AND tgname='trg_sc004_assessment_evidence_delete'
-      AND tgenabled='O'
+    SELECT 1
+    FROM pg_trigger t
+    WHERE t.tgrelid='public.avaliacoes'::regclass
+      AND t.tgname='trg_sc004_assessment_evidence_delete'
+      AND t.tgenabled='O'
+      AND (t.tgtype & 2) = 2
+      AND (t.tgtype & 8) = 8
+      AND (t.tgtype & 4) = 0
+      AND (t.tgtype & 16) = 0
+      AND (t.tgtype & 32) = 0
+      AND t.tgfoid='public.sc004_block_assessment_evidence_delete()'::regprocedure
   ) INTO v_catalog;
   DROP TABLE IF EXISTS pg_temp.qa_x7b_probe;
   CREATE TEMP TABLE qa_x7b_probe(id uuid PRIMARY KEY) ON COMMIT DROP;
@@ -1229,6 +1274,22 @@ select pg_temp.qa_probe_actor_dml_strict('R53-H4-DELETE','DENY','BLOCKING STAFF 
 -- em_andamento attempt, sends two requests through two real PostgreSQL backend
 -- sessions, and accepts only one success plus one lifecycle denial.
 CREATE EXTENSION IF NOT EXISTS dblink;
+CREATE OR REPLACE FUNCTION pg_temp.qa_dblink_conninfo()
+RETURNS text
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_password text := nullif(current_setting('kora.ci.dblink_password', true), '');
+  v_host text := coalesce(nullif(current_setting('kora.ci.dblink_host', true), ''), '127.0.0.1');
+  v_port text := coalesce(nullif(current_setting('kora.ci.dblink_port', true), ''), '5432');
+BEGIN
+  IF v_password IS NULL THEN
+    RETURN 'dbname=' || current_database() || ' user=' || current_user;
+  END IF;
+  RETURN 'host=' || v_host || ' port=' || v_port || ' dbname=' || current_database()
+    || ' user=' || current_user || ' password=' || v_password;
+END
+$$;
 CREATE OR REPLACE FUNCTION pg_temp.qa_probe_submit_serialization(
   p_result_id text, p_attempt_id uuid, p_numero integer
 ) RETURNS void
@@ -1243,8 +1304,8 @@ DECLARE
   v_after text;
 BEGIN
   RESET ROLE;
-  PERFORM dblink_connect('sc004_r53_s1','dbname='||current_database());
-  PERFORM dblink_connect('sc004_r53_s2','dbname='||current_database());
+  PERFORM dblink_connect('sc004_r53_s1',pg_temp.qa_dblink_conninfo());
+  PERFORM dblink_connect('sc004_r53_s2',pg_temp.qa_dblink_conninfo());
   PERFORM dblink_exec('sc004_r53_s1','SET ROLE authenticated');
   PERFORM dblink_exec('sc004_r53_s2','SET ROLE authenticated');
   PERFORM dblink_exec('sc004_r53_s1','SET request.jwt.claim.sub = ''a3000000-0000-0000-0000-000000000012''');
@@ -1309,6 +1370,23 @@ insert into public.avaliacao_tentativas(
   '{"aa000000-0000-0000-0000-000000000001":"a"}'::jsonb,1
 );
 select pg_temp.qa_probe_submit_serialization('R53-M1-SERIALIZATION','ad000000-0000-0000-0000-000000000013'::uuid,2);
+
+-- M4 self-test: an absent/mismatched target is never a successful DENY proof.
+-- The row is removed after checking the observed classification so this
+-- harness-health assertion does not inflate the security PASS count.
+select pg_temp.qa_probe_actor_dml_strict('R54-M4-ZERO-ROW-SELFTEST','INCONCLUSIVE','HARNESS SELF-TEST','Nonexistent target must remain inconclusive, never a DENY pass','a3000000-0000-0000-0000-000000000005','delete from public.questoes where id=''aa000000-0000-0000-0000-000000009999''','select count(*)::text from public.questoes where id=''aa000000-0000-0000-0000-000000009999''');
+DO $$
+DECLARE v_observed text;
+BEGIN
+  SELECT observed INTO v_observed FROM qa_results WHERE id='R54-M4-ZERO-ROW-SELFTEST';
+  IF v_observed IS DISTINCT FROM 'INCONCLUSIVE' THEN
+    RAISE EXCEPTION 'R54 zero-row self-test expected INCONCLUSIVE, got %', coalesce(v_observed,'<MISSING>');
+  END IF;
+  DELETE FROM qa_results WHERE id='R54-M4-ZERO-ROW-SELFTEST';
+END
+$$;
+
+\echo 'R54_M4_ZERO_ROW_SELFTEST: PASS (observed INCONCLUSIVE)'
 
 -- Restore role and emit all results. Fixture remains disposable and is removed by dropping the QA database.
 reset role;

@@ -135,21 +135,36 @@ jobs:
         run: |
           set -euo pipefail
           export LC_ALL=C
+          # Supabase_admin owns disposable database setup; postgres is the
+          # migration/replay actor. Application actors remain
+          # anon/authenticated inside the SQL probes.
+          admin_user=supabase_admin
+          app_user=postgres
           db=kora_sc004_r5_hb1
-          cleanup() { dropdb --if-exists -U postgres "$db" >/dev/null 2>&1; }
+          cleanup() {
+            local status=$?
+            if dropdb --if-exists -U "$admin_user" "$db" >/dev/null 2>&1; then
+              echo 'HB1_CLEANUP: PASS'
+            else
+              echo 'HB1_CLEANUP: FAIL'
+              status=1
+            fi
+            exit "$status"
+          }
           trap cleanup EXIT
           # HB1 must start from a truly pristine database. Cloning kora_ci here
           # would replay 001-039 on an already migrated template and fail on
           # pre-existing objects before the 040 preflight is exercised.
-          dropdb --if-exists -U postgres "$db" >/dev/null 2>&1 || true
-          createdb -U postgres --owner=supabase_admin --template=template0 "$db"
+          dropdb --if-exists -U "$admin_user" "$db" >/dev/null 2>&1 || true
+          createdb -U "$admin_user" --owner="$admin_user" --template=template0 "$db"
           export PGDATABASE="$db"
 
           # Recreate only the disposable Supabase compatibility layer that the
           # service database has before application migrations. The application
           # schema itself remains pristine until the prefix replay below.
-          psql -U postgres -v ON_ERROR_STOP=1 <<SQL
+          psql -U "$admin_user" -v ON_ERROR_STOP=1 <<SQL
           CREATE EXTENSION IF NOT EXISTS pgcrypto;
+          CREATE EXTENSION IF NOT EXISTS dblink;
           CREATE SCHEMA auth;
           CREATE SCHEMA extensions;
           CREATE SCHEMA storage;
@@ -178,16 +193,20 @@ jobs:
             ON TABLES TO anon, authenticated;
           SQL
 
-          pristine_public_tables=$(psql -U postgres -At -c "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p');")
+          pristine_public_tables=$(psql -U "$admin_user" -At -c "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p');")
           if [[ "$pristine_public_tables" != "0" ]]; then
             echo "SC-004 HB1 FAIL: pristine bootstrap already contains public tables ($pristine_public_tables)"
             exit 1
           fi
+          echo 'HB1_SETUP: PASS (supabase_admin bootstrap; postgres replay actor; SQL actors remain anon/authenticated)'
 
           bootstrap_copy=$(mktemp)
           trap 'rm -f "$bootstrap_copy"; cleanup' EXIT
           sed "s/kora_ci/$db/g" tests/payments/sql/bootstrap.sql > "$bootstrap_copy"
-          psql -U postgres -v ON_ERROR_STOP=1 -f "$bootstrap_copy"
+          # The compatibility bootstrap must be owned by the same disposable
+          # service role that replays migrations; SQL probes still SET ROLE to
+          # anon/authenticated and do not inherit database-admin authority.
+          psql -U "$app_user" -v ON_ERROR_STOP=1 -f "$bootstrap_copy"
 
           for migration in $(find supabase/migrations -maxdepth 1 -type f -print | sort); do
             name=$(basename "$migration")
@@ -244,6 +263,10 @@ jobs:
       - name: Run School SC-004 A/B fail-closed security suite
         run: |
           psql -v ON_ERROR_STOP=1 <<'SQL'
+          \getenv dblink_password PGPASSWORD
+          SET kora.ci.dblink_host = '127.0.0.1';
+          SET kora.ci.dblink_port = '5432';
+          SET kora.ci.dblink_password = :'dblink_password';
           \i tests/school/sql/sc004_ab_qa.sql
           \i tests/school/sql/sc004_cd_mutation_qa.sql
           SQL
