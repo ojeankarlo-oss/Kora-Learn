@@ -135,18 +135,26 @@ jobs:
         run: |
           set -euo pipefail
           export LC_ALL=C
-          # Supabase_admin owns disposable database setup; postgres is the
-          # migration/replay actor. Application actors remain
-          # anon/authenticated inside the SQL probes.
+          # Supabase_admin owns disposable database setup; a separate
+          # NOSUPERUSER role is the migration/replay actor. Application
+          # security actors remain anon/authenticated inside the SQL probes.
           admin_user=supabase_admin
-          app_user=postgres
+          app_user=kora_hb1_app
+          admin_password=local_ci_fixture_only
+          app_password=local_ci_fixture_only
           db=kora_sc004_r5_hb1
           cleanup() {
             local status=$?
-            if dropdb --if-exists -U "$admin_user" "$db" >/dev/null 2>&1; then
+            if PGPASSWORD="$admin_password" dropdb --if-exists -U "$admin_user" "$db" >/dev/null 2>&1; then
               echo 'HB1_CLEANUP: PASS'
             else
               echo 'HB1_CLEANUP: FAIL'
+              status=1
+            fi
+            if PGPASSWORD="$admin_password" psql -U "$admin_user" -d postgres -v ON_ERROR_STOP=1 -c "DROP ROLE IF EXISTS $app_user" >/dev/null 2>&1; then
+              echo 'HB1_ROLE_CLEANUP: PASS'
+            else
+              echo 'HB1_ROLE_CLEANUP: FAIL'
               status=1
             fi
             exit "$status"
@@ -155,8 +163,14 @@ jobs:
           # HB1 must start from a truly pristine database. Cloning kora_ci here
           # would replay 001-039 on an already migrated template and fail on
           # pre-existing objects before the 040 preflight is exercised.
-          dropdb --if-exists -U "$admin_user" "$db" >/dev/null 2>&1 || true
-          createdb -U "$admin_user" --owner="$admin_user" --template=template0 "$db"
+          PGPASSWORD="$admin_password" dropdb --if-exists -U "$admin_user" "$db" >/dev/null 2>&1 || true
+          PGPASSWORD="$admin_password" psql -U "$admin_user" -d postgres -v ON_ERROR_STOP=1 <<SQL
+          DROP ROLE IF EXISTS $app_user;
+          CREATE ROLE $app_user LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT PASSWORD '$app_password';
+          GRANT supabase_auth_admin, supabase_storage_admin TO $app_user;
+          CREATE DATABASE $db OWNER $app_user;
+          SQL
+          export PGPASSWORD="$admin_password"
           export PGDATABASE="$db"
 
           # Recreate only the disposable Supabase compatibility layer that the
@@ -177,36 +191,47 @@ jobs:
           CREATE TABLE auth.users (id uuid PRIMARY KEY, email text UNIQUE NOT NULL, email_confirmed_at timestamptz);
           ALTER TABLE auth.users OWNER TO supabase_auth_admin;
           CREATE TABLE vault.decrypted_secrets (name text PRIMARY KEY, decrypted_secret text);
+          ALTER SCHEMA auth OWNER TO supabase_auth_admin;
+          ALTER SCHEMA storage OWNER TO supabase_storage_admin;
           ALTER DATABASE "$db" SET search_path = public, extensions;
-          GRANT USAGE ON SCHEMA auth, storage, extensions, vault, net TO postgres, supabase_auth_admin, anon, authenticated, service_role;
-          GRANT SELECT ON auth.users TO postgres, supabase_auth_admin;
+          GRANT USAGE ON SCHEMA auth, storage, extensions, vault, net TO $app_user, supabase_auth_admin, anon, authenticated, service_role;
+          GRANT SELECT ON auth.users TO $app_user, supabase_auth_admin;
           GRANT EXECUTE ON FUNCTION auth.uid() TO PUBLIC;
-          GRANT USAGE, CREATE ON SCHEMA public TO postgres;
+          GRANT USAGE, CREATE ON SCHEMA public TO $app_user;
           GRANT USAGE, CREATE ON SCHEMA storage TO supabase_storage_admin;
           GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
-          GRANT CONNECT, CREATE ON DATABASE "$db" TO postgres;
-          GRANT USAGE, CREATE ON SCHEMA public TO postgres;
-          GRANT USAGE ON SCHEMA auth TO postgres;
-          GRANT SELECT, REFERENCES ON auth.users TO postgres;
-          ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
-            GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES
-            ON TABLES TO anon, authenticated;
+          GRANT CONNECT, CREATE ON DATABASE "$db" TO $app_user;
+          GRANT USAGE ON SCHEMA auth TO $app_user;
+          GRANT SELECT, REFERENCES ON auth.users TO $app_user;
           SQL
+          app_is_superuser=$(PGPASSWORD="$admin_password" psql -U "$admin_user" -d postgres -At -c "select rolsuper from pg_roles where rolname='$app_user'")
+          if [[ "$app_is_superuser" != 'f' ]]; then
+            echo "SC-004 HB1 FAIL: application replay actor must be NOSUPERUSER (got '$app_is_superuser')"
+            exit 1
+          fi
 
           pristine_public_tables=$(psql -U "$admin_user" -At -c "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p');")
           if [[ "$pristine_public_tables" != "0" ]]; then
             echo "SC-004 HB1 FAIL: pristine bootstrap already contains public tables ($pristine_public_tables)"
             exit 1
           fi
-          echo 'HB1_SETUP: PASS (supabase_admin bootstrap; postgres replay actor; SQL actors remain anon/authenticated)'
+          echo "HB1_SETUP: PASS (supabase_admin bootstrap; $app_user replay actor NOSUPERUSER; SQL actors remain anon/authenticated)"
 
           bootstrap_copy=$(mktemp)
           trap 'rm -f "$bootstrap_copy"; cleanup' EXIT
-          sed "s/kora_ci/$db/g" tests/payments/sql/bootstrap.sql > "$bootstrap_copy"
-          # The compatibility bootstrap must be owned by the same disposable
-          # service role that replays migrations; SQL probes still SET ROLE to
-          # anon/authenticated and do not inherit database-admin authority.
-          psql -U "$app_user" -v ON_ERROR_STOP=1 -f "$bootstrap_copy"
+          sed -e "s/kora_ci/$db/g" \
+              -e "s/\\\\connect $db postgres/\\\\connect $db $admin_user/g" \
+              -e "s/ to postgres;/ to $app_user;/g" \
+              tests/payments/sql/bootstrap.sql > "$bootstrap_copy"
+          # The compatibility bootstrap runs under the admin/bootstrap actor;
+          # replay then runs under the distinct NOSUPERUSER application actor.
+          PGPASSWORD="$admin_password" psql -U "$admin_user" -v ON_ERROR_STOP=1 -f "$bootstrap_copy"
+          export PGUSER="$app_user" PGPASSWORD="$app_password"
+          psql -U "$app_user" -v ON_ERROR_STOP=1 <<'SQL'
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES
+            ON TABLES TO anon, authenticated;
+          SQL
 
           for migration in $(find supabase/migrations -maxdepth 1 -type f -print | sort); do
             name=$(basename "$migration")

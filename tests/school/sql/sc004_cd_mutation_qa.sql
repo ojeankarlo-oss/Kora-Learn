@@ -405,42 +405,50 @@ select pg_temp.qa_expect_result('M19-ROLLBACK','PASS');
 -- replayed as the explicit forward restoration before the post-rollback probe.
 select pg_temp.qa_record('M20-BASELINE','LOCKED',CASE WHEN pg_get_functiondef('public.enviar_tentativa_avaliacao(uuid,jsonb)'::regprocedure) LIKE '%FOR UPDATE%' THEN 'LOCKED' ELSE 'UNLOCKED' END,'MUTATION NORMAL ASSERTION','','','RPC contains attempt row lock');
 select pg_temp.qa_expect_result('M20-BASELINE','PASS');
-BEGIN;
-DO $do$
-BEGIN
-PERFORM dblink_connect('sc004_r53_mutator',pg_temp.qa_dblink_conninfo());
-PERFORM dblink_exec('sc004_r53_mutator',$ddl$CREATE OR REPLACE FUNCTION public.enviar_tentativa_avaliacao(p_tentativa_id uuid,p_respostas jsonb)
-RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''
-AS $$
-DECLARE v_t public.avaliacao_tentativas%rowtype;
-BEGIN
-  SELECT * INTO v_t FROM public.avaliacao_tentativas
-  WHERE id=p_tentativa_id AND usuario_id=public.current_usuario_id();
-  IF NOT FOUND THEN RAISE EXCEPTION 'Tentativa não encontrada'; END IF;
-  UPDATE public.avaliacao_tentativas SET situacao='corrigida'::public.situacao_tentativa WHERE id=v_t.id;
-  RETURN jsonb_build_object('id',v_t.id,'situacao','corrigida');
-END
-$$;$ddl$);
-PERFORM dblink_disconnect('sc004_r53_mutator');
-END
-$do$;
-COMMIT;
-insert into public.avaliacao_tentativas(
+-- Commit the detector fixture before opening dblink sessions; otherwise their
+-- independent transactions cannot observe the target attempt.
+INSERT INTO public.avaliacao_tentativas(
   id,tenant_id,avaliacao_id,matricula_id,usuario_id,numero_tentativa,
   situacao,questoes_ordem,gabarito_snapshot,nota_maxima
-) values (
+) VALUES (
   'ad000000-0000-0000-0000-000000000014','a1000000-0000-0000-0000-000000000001',
   'ac000000-0000-0000-0000-000000000009','a8000000-0000-0000-0000-000000000003',
-  'a4000000-0000-0000-0000-000000000012',5,'em_andamento',
+  'a4000000-0000-0000-0000-000000000012',3,'em_andamento',
   '[{"questao_id":"aa000000-0000-0000-0000-000000000001","pontos":1}]'::jsonb,
   '{"aa000000-0000-0000-0000-000000000001":"a"}'::jsonb,1
 );
+DO $do$
+BEGIN
+PERFORM dblink_connect('sc004_r53_mutator',pg_temp.qa_dblink_conninfo());
+PERFORM dblink_exec('sc004_r53_mutator',$ddl$CREATE OR REPLACE FUNCTION public.enviar_tentativa_avaliacao(
+  p_tentativa_id uuid,p_respostas jsonb
+) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+DECLARE v_t public.avaliacao_tentativas%rowtype; v_item pg_catalog.jsonb;
+BEGIN
+  -- Disposable mutation: remove the FOR UPDATE lifecycle gate and terminal CAS.
+  SELECT * INTO v_t FROM public.avaliacao_tentativas WHERE id=p_tentativa_id AND usuario_id=public.current_usuario_id();
+  IF NOT FOUND THEN RAISE EXCEPTION 'Tentativa não encontrada'; END IF;
+  IF v_t.situacao <> 'em_andamento' THEN RAISE EXCEPTION 'Tentativa já enviada'; END IF;
+  FOR v_item IN SELECT * FROM pg_catalog.jsonb_array_elements(coalesce(p_respostas,'[]'::pg_catalog.jsonb)) LOOP
+    INSERT INTO public.avaliacao_respostas(tenant_id,tentativa_id,questao_id,alternativa_id,pontos_obtidos,corrigida)
+    VALUES (v_t.tenant_id,v_t.id,(v_item->>'questao_id')::pg_catalog.uuid,v_item->>'alternativa_id',0,false)
+    ON CONFLICT (tentativa_id,questao_id) DO UPDATE SET alternativa_id=EXCLUDED.alternativa_id;
+  END LOOP;
+  UPDATE public.avaliacao_tentativas SET situacao='corrigida',enviada_em=pg_catalog.now(),nota=0,nota_maxima=0,percentual=0 WHERE id=v_t.id;
+  RETURN pg_catalog.jsonb_build_object('id',v_t.id,'situacao','corrigida');
+END $$;$ddl$);
+PERFORM dblink_disconnect('sc004_r53_mutator');
+END $do$;
+DROP TRIGGER IF EXISTS qa_r55_submit_pause ON public.avaliacao_respostas;
+CREATE TRIGGER qa_r55_submit_pause BEFORE INSERT ON public.avaliacao_respostas FOR EACH ROW EXECUTE FUNCTION pg_temp.qa_pause_submit_response();
 select pg_temp.qa_probe_submit_serialization('M20-MUTATED','ad000000-0000-0000-0000-000000000014'::uuid,5);
+DROP TRIGGER qa_r55_submit_pause ON public.avaliacao_respostas;
 select pg_temp.qa_expect_mutation_state('M20-MUTATED','UNSAFE_CONCURRENT_SUCCESS');
 DELETE FROM qa_results WHERE id='M20-MUTATED';
 \i supabase/migrations/050_kora_school_sc004_r54_deterministic_c1.sql
 select pg_temp.qa_record('M20-ROLLBACK','LOCKED',CASE WHEN pg_get_functiondef('public.enviar_tentativa_avaliacao(uuid,jsonb)'::regprocedure) LIKE '%FOR UPDATE%' THEN 'LOCKED' ELSE 'UNLOCKED' END,'MUTATION ROLLBACK ASSERTION','','','RPC lock restored by 049');
 select pg_temp.qa_expect_result('M20-ROLLBACK','PASS');
+DELETE FROM public.avaliacao_tentativas WHERE id='ad000000-0000-0000-0000-000000000014';
 \echo 'M20_SUBMISSION_SERIALIZATION_KILLED: PASS'
 
 
@@ -453,7 +461,7 @@ DELETE FROM qa_results WHERE id='M21-ZERO-ROW';
 
 -- M22 — point bounds. Keep actor scope and submitted lifecycle intact; the
 -- disposable replacement removes only the p_pontos range check.
-select pg_temp.qa_probe_actor_rpc('M22-BASELINE','DENY','MUTATION NORMAL ASSERTION','Authorized Teacher Exact rejects above-maximum points on the same submitted response','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,101,''M22 baseline high points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
+select pg_temp.qa_probe_actor_rpc('M22-BASELINE','DENY','MUTATION NORMAL ASSERTION','Authorized Teacher Exact rejects points slightly above the question maximum on the same submitted response','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,2,''M22 baseline high points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
 select pg_temp.qa_expect_result('M22-BASELINE','PASS');
 BEGIN;
 CREATE OR REPLACE FUNCTION public.corrigir_resposta_avaliacao(p_resposta_id uuid,p_pontos numeric,p_comentario text DEFAULT NULL)
@@ -480,14 +488,14 @@ BEGIN
   RETURN jsonb_build_object('tentativa_id',v_t.id,'situacao','corrigida');
 END
 $$;
-select pg_temp.qa_probe_actor_rpc('M22-MUTATED','DENY','MUTATION NORMAL ASSERTION','The same above-maximum assertion after only point-bound removal','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,101,''M22 mutated high points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
+select pg_temp.qa_probe_actor_rpc('M22-MUTATED','DENY','MUTATION NORMAL ASSERTION','The same above-maximum assertion after only point-bound removal','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,2,''M22 mutated high points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
 select pg_temp.qa_expect_mutation('M22-MUTATED');
 DELETE FROM qa_results WHERE id='M22-MUTATED';
 select pg_temp.qa_probe_actor_rpc('M23-MUTATED','DENY','MUTATION NORMAL ASSERTION','The same negative-point assertion after only point-bound removal','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,-1,''M23 mutated negative points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
 select pg_temp.qa_expect_mutation('M23-MUTATED');
 DELETE FROM qa_results WHERE id='M23-MUTATED';
 ROLLBACK;
-select pg_temp.qa_probe_actor_rpc('M22-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Above-maximum points are denied again after point-bound rollback','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,101,''M22 rollback high points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
+select pg_temp.qa_probe_actor_rpc('M22-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Above-maximum points are denied again after point-bound rollback','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,2,''M22 rollback high points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
 select pg_temp.qa_expect_result('M22-ROLLBACK','PASS');
 select pg_temp.qa_probe_actor_rpc('M23-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Negative points are denied again after point-bound rollback','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,-1,''M23 rollback negative points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
 select pg_temp.qa_expect_result('M23-ROLLBACK','PASS');
@@ -497,8 +505,8 @@ select pg_temp.qa_expect_result('M23-ROLLBACK','PASS');
 select pg_temp.qa_probe_l4_execute('M24-BASELINE');
 select pg_temp.qa_expect_result('M24-BASELINE','PASS');
 BEGIN;
-GRANT EXECUTE ON FUNCTION public.sc004_assignment_lifecycle() TO anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.sc004_validate_parent_integrity() TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.sc004_assignment_lifecycle() TO PUBLIC;
+GRANT EXECUTE ON FUNCTION public.sc004_validate_parent_integrity() TO PUBLIC;
 select pg_temp.qa_probe_l4_execute('M24-MUTATED');
 select pg_temp.qa_expect_mutation('M24-MUTATED');
 DELETE FROM qa_results WHERE id='M24-MUTATED';

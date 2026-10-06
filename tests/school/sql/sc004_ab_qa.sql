@@ -167,6 +167,41 @@ begin
     p_detail || ' count=' || coalesce(v_count::text,'') || ' sqlstate=' || v_state || ' message=' || v_message);
 end $$;
 
+create or replace function pg_temp.qa_probe_actor_count_strict(
+  p_id text, p_expected text, p_classification text, p_detail text,
+  p_actor_sub text, p_sql text, p_state_sql text
+) returns void language plpgsql as $$
+declare
+  v_count bigint := 0;
+  v_observed text := 'INCONCLUSIVE';
+  v_before text;
+  v_after text;
+  v_state text := '';
+  v_message text := '';
+  v_target_exists boolean := false;
+begin
+  reset role;
+  execute p_state_sql into v_before;
+  v_target_exists := coalesce(v_before,'') not in ('','0','0.0','0.00','false','<NULL>');
+  begin
+    set local role authenticated;
+    perform set_config('request.jwt.claim.sub',p_actor_sub,false);
+    execute p_sql into v_count;
+    v_observed := case when coalesce(v_count,0) > 0 then 'ALLOW'
+                       when v_target_exists then 'DENY'
+                       else 'INCONCLUSIVE' end;
+  exception when others then
+    get stacked diagnostics v_state=returned_sqlstate,v_message=message_text;
+    v_observed := case when v_state in ('42501','42503') and v_target_exists then 'DENY'
+                       else 'INCONCLUSIVE' end;
+  end;
+  reset role;
+  execute p_state_sql into v_after;
+  if v_before is distinct from v_after then v_observed := 'STATE_CHANGED'; end if;
+  perform pg_temp.qa_record(p_id,p_expected,v_observed,p_classification,v_before,v_after,
+    p_detail||' target_exists='||v_target_exists::text||' count='||coalesce(v_count::text,'')||' sqlstate='||v_state||' message='||v_message);
+end $$;
+
 create or replace function pg_temp.qa_probe_actor_dml(
   p_id text, p_expected text, p_classification text, p_detail text,
   p_actor_sub text, p_sql text, p_state_sql text
@@ -243,7 +278,7 @@ begin
     get stacked diagnostics v_state=returned_sqlstate,v_message=message_text;
     if v_message <> '__QA_ROLLBACK__' then
       v_observed := case
-        when v_state in ('42501','42503') then 'DENY'
+        when v_state in ('42501','42503') and v_target_exists then 'DENY'
         when v_state = '23503' and v_message = 'update or delete on table "questoes" violates foreign key constraint "avaliacao_questoes_questao_id_fkey" on table "avaliacao_questoes"' then 'DENY'
         when v_state = '23514' and v_message in ('A autoria da avaliação não pode ser transferida por um docente','Avaliação com evidência acadêmica não pode ter sua estrutura ou configuração alterada') then 'DENY'
         else 'INCONCLUSIVE'
@@ -339,6 +374,46 @@ begin
   perform pg_temp.qa_record(p_id,p_expected,v_observed,p_classification,v_before,v_after,
     p_detail || ' sqlstate=' || v_state || ' message=' || v_message);
 end $$;
+
+create or replace function pg_temp.qa_probe_actor_rpc_strict(
+  p_id text, p_expected text, p_classification text, p_detail text,
+  p_actor_sub text, p_setup_sql text, p_sql text, p_state_sql text
+) returns void language plpgsql as $$
+declare
+  v_json jsonb;
+  v_observed text := 'INCONCLUSIVE';
+  v_before text;
+  v_after text;
+  v_state text := '';
+  v_message text := '';
+  v_target_exists boolean := false;
+begin
+  reset role;
+  if nullif(p_setup_sql,'') is not null then execute p_setup_sql; end if;
+  execute p_state_sql into v_before;
+  v_target_exists := coalesce(v_before,'') not in ('','0','0.0','0.00','false','<NULL>');
+  begin
+    set local role authenticated;
+    perform set_config('request.jwt.claim.sub',p_actor_sub,false);
+    execute p_sql into v_json;
+    v_observed := 'ALLOW';
+    raise exception using message='__QA_ROLLBACK__';
+  exception when others then
+    get stacked diagnostics v_state=returned_sqlstate,v_message=message_text;
+    if v_message <> '__QA_ROLLBACK__' then
+      v_observed := case
+        when v_state in ('42501','42503') and v_target_exists then 'DENY'
+        when v_message in ('Resposta não encontrada','Tentativa não encontrada','Avaliação não encontrada','Professor sem assignment exato para corrigir resposta','Somente docentes podem corrigir respostas','Tentativa ainda não está enviada para correção','Tentativa mudou de estado durante a correção','Pontuação fora do limite da questão','Resposta já corrigida') and v_target_exists then 'DENY'
+        else 'INCONCLUSIVE' end;
+    end if;
+  end;
+  reset role;
+  execute p_state_sql into v_after;
+  if v_before is distinct from v_after then v_observed := 'STATE_CHANGED'; end if;
+  perform pg_temp.qa_record(p_id,p_expected,v_observed,p_classification,v_before,v_after,
+    p_detail||' target_exists='||v_target_exists::text||' sqlstate='||v_state||' message='||v_message);
+end $$;
+
 
 create or replace function pg_temp.qa_probe_actor_rpc_no_gabarito(
   p_id text, p_expected text, p_classification text, p_detail text,
@@ -850,7 +925,11 @@ select pg_temp.qa_probe_actor_rpc('R52-GRADE-WRONG-CLASS','DENY','BLOCKING GRADI
 select pg_temp.qa_probe_actor_rpc('R52-GRADE-WRONG-SUBJECT','DENY','BLOCKING GRADING AUTHORITY','Teacher Exact cannot grade a submitted 8A Physics response','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000001''::uuid,1,''QA wrong subject grading'')','select situacao::text||'':''||corrigida::text from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000001''');
 select pg_temp.qa_probe_actor_rpc('R52-GRADE-TEACHER-B','DENY','BLOCKING GRADING AUTHORITY','Tenant B Teacher cannot grade Tenant A submitted response','b3000000-0000-0000-0000-000000000001','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,1,''QA Teacher B grading'')','select situacao::text||'':''||corrigida::text from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
 select pg_temp.qa_probe_actor_rpc('R52-GRADE-STAFF-B','DENY','BLOCKING GRADING AUTHORITY','Tenant B Staff cannot grade Tenant A submitted response','b3000000-0000-0000-0000-000000000002','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,1,''QA Staff B grading'')','select situacao::text||'':''||corrigida::text from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
-select pg_temp.qa_probe_actor_rpc('R52-GRADE-FORGED-ID','DENY','BLOCKING GRADING AUTHORITY','Teacher Exact cannot grade a forged response identifier','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000009999''::uuid,1,''QA forged grading id'')','select count(*)::text from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000009999''');
+select pg_temp.qa_probe_actor_rpc('R52-GRADE-FORGED-ID','DENY','BLOCKING GRADING AUTHORITY','Teacher Exact cannot grade a forged response identifier','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000009999''::uuid,1,''QA forged grading id'')','select count(*)::text from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000009999''');select pg_temp.qa_probe_actor_rpc_strict('R55-ZERO-ROW-RPC-SELFTEST','INCONCLUSIVE','HARNESS SELF-TEST','A nonexistent grading target must never be recorded as DENY','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000009998''::uuid,1,''QA nonexistent self-test'')','select count(*)::text from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000009998''');
+select case when exists(select 1 from qa_results where id='R55-ZERO-ROW-RPC-SELFTEST' and observed='INCONCLUSIVE') then 1 else 1/(select count(*) from qa_results where id='__R55_ASSERTION_FAILURE__') end;
+DELETE FROM qa_results WHERE id='R55-ZERO-ROW-RPC-SELFTEST';
+\echo 'R55_ZERO_ROW_RPC_SELFTEST: PASS (observed INCONCLUSIVE)';
+
 
 -- R4 M1: direct table writes are not a grading path.
 select pg_temp.qa_probe_actor_dml('R4-M1-UPDATE-SCORE','DENY','BLOCKING DIRECT GRADING WRITE','Teacher X cannot UPDATE pontos_obtidos directly','a3000000-0000-0000-0000-000000000005','update public.avaliacao_respostas set pontos_obtidos=999 where id=''ae000000-0000-0000-0000-000000000003''','select pontos_obtidos::text from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000000003''');
@@ -959,7 +1038,11 @@ select pg_temp.qa_probe_actor_dml('R5-STAFF-MATERIAL-INSERT','ALLOW','BLOCKING A
 select pg_temp.qa_probe_actor_dml('R5-TEACHER-MATERIAL-INSERT','DENY','BLOCKING ACADEMIC AUTHORITY','Teacher Exact cannot create a catalog support material without a Class binding','a3000000-0000-0000-0000-000000000005','insert into public.materiais_apoio(id,tenant_id,disciplina_id,titulo,url) values (''c3000000-0000-0000-0000-000000000002'',''a1000000-0000-0000-0000-000000000001'',''a6000000-0000-0000-0000-000000000001'',''QA teacher material'',''https://qa.invalid/teacher-material'')','select count(*)::text from public.materiais_apoio where id=''c3000000-0000-0000-0000-000000000002''');
 
 -- Student answer-key boundaries and the supported submission RPC.
-select pg_temp.qa_probe_actor_count('R4-STUDENT-GABARITO-WHERE','DENY','BLOCKING GABARITO CONFIDENTIALITY','Student cannot use a WHERE-clause answer-key oracle','a3000000-0000-0000-0000-000000000012','select count(*) from public.avaliacao_tentativas where id=''ad000000-0000-0000-0000-000000000001'' and gabarito_snapshot <> ''{}''::jsonb','select count(*)::text from public.avaliacao_tentativas where id=''ad000000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_count('R4-STUDENT-GABARITO-WHERE','DENY','BLOCKING GABARITO CONFIDENTIALITY','Student cannot use a WHERE-clause answer-key oracle','a3000000-0000-0000-0000-000000000012','select count(*) from public.avaliacao_tentativas where id=''ad000000-0000-0000-0000-000000000001'' and gabarito_snapshot <> ''{}''::jsonb','select count(*)::text from public.avaliacao_tentativas where id=''ad000000-0000-0000-0000-000000000001''');select pg_temp.qa_probe_actor_count_strict('R55-WRONG-TARGET-SELFTEST','INCONCLUSIVE','HARNESS SELF-TEST','A nonexistent answer-key target must never be recorded as DENY','a3000000-0000-0000-0000-000000000012','select count(*) from public.avaliacao_tentativas where id=''ad000000-0000-0000-0000-000000009997'' and gabarito_snapshot <> ''{}''::jsonb','select count(*)::text from public.avaliacao_tentativas where id=''ad000000-0000-0000-0000-000000009997''');
+select case when exists(select 1 from qa_results where id='R55-WRONG-TARGET-SELFTEST' and observed='INCONCLUSIVE') then 1 else 1/(select count(*) from qa_results where id='__R55_ASSERTION_FAILURE__') end;
+DELETE FROM qa_results WHERE id='R55-WRONG-TARGET-SELFTEST';
+\echo 'R55_WRONG_TARGET_SELFTEST: PASS (observed INCONCLUSIVE)';
+
 select pg_temp.qa_probe_actor_count('R4-STUDENT-GABARITO-STAR','DENY','BLOCKING GABARITO CONFIDENTIALITY','Student cannot whole-row SELECT an attempt containing gabarito_snapshot','a3000000-0000-0000-0000-000000000012','select count(*) from (select t as whole_row from public.avaliacao_tentativas t where t.id=''ad000000-0000-0000-0000-000000000001'') x','select count(*)::text from public.avaliacao_tentativas where id=''ad000000-0000-0000-0000-000000000001''');
 select pg_temp.qa_probe_actor_rpc_no_gabarito('R4-STUDENT-SUBMISSION-RPC','ALLOW_NO_GABARITO','BLOCKING GABARITO CONFIDENTIALITY','Student submission RPC returns no gabarito_snapshot','a3000000-0000-0000-0000-000000000012','select public.enviar_tentativa_avaliacao(''ad000000-0000-0000-0000-000000000001''::uuid,''[{"questao_id":"aa000000-0000-0000-0000-000000000001","alternativa_id":"a"}]''::jsonb)','select situacao::text||'':''||coalesce(nota::text,''NULL'') from public.avaliacao_tentativas where id=''ad000000-0000-0000-0000-000000000001''');
 
@@ -1119,22 +1202,29 @@ SELECT pg_temp.qa_record(
 );
 
 CREATE OR REPLACE FUNCTION pg_temp.qa_probe_l4_execute(p_id text)
-RETURNS void
-LANGUAGE plpgsql
-AS $$
+RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
+  v_assignment text := 'public.sc004_assignment_lifecycle()';
+  v_parent text := 'public.sc004_validate_parent_integrity()';
   v_observed text;
+  v_detail text;
 BEGIN
   v_observed := CASE WHEN
-    NOT has_function_privilege('anon','public.sc004_assignment_lifecycle()','EXECUTE')
-    AND NOT has_function_privilege('authenticated','public.sc004_assignment_lifecycle()','EXECUTE')
-    AND NOT has_function_privilege('anon','public.sc004_validate_parent_integrity()','EXECUTE')
-    AND NOT has_function_privilege('authenticated','public.sc004_validate_parent_integrity()','EXECUTE')
+    NOT has_function_privilege('public',v_assignment,'EXECUTE')
+    AND NOT has_function_privilege('anon',v_assignment,'EXECUTE')
+    AND NOT has_function_privilege('authenticated',v_assignment,'EXECUTE')
+    AND NOT has_function_privilege('service_role',v_assignment,'EXECUTE')
+    AND NOT has_function_privilege('public',v_parent,'EXECUTE')
+    AND NOT has_function_privilege('anon',v_parent,'EXECUTE')
+    AND NOT has_function_privilege('authenticated',v_parent,'EXECUTE')
+    AND NOT has_function_privilege('service_role',v_parent,'EXECUTE')
     THEN 'DENY' ELSE 'ALLOW' END;
-  PERFORM pg_temp.qa_record(
-    p_id,'DENY',v_observed,'BLOCKING TRIGGER FUNCTION EXECUTE ACL','','',
-    'anon/authenticated have no direct EXECUTE on trigger-only helpers'
-  );
+  v_detail := format('effective execute assignment public=%s anon=%s authenticated=%s service_role=%s; parent public=%s anon=%s authenticated=%s service_role=%s',
+    has_function_privilege('public',v_assignment,'EXECUTE'),has_function_privilege('anon',v_assignment,'EXECUTE'),
+    has_function_privilege('authenticated',v_assignment,'EXECUTE'),has_function_privilege('service_role',v_assignment,'EXECUTE'),
+    has_function_privilege('public',v_parent,'EXECUTE'),has_function_privilege('anon',v_parent,'EXECUTE'),
+    has_function_privilege('authenticated',v_parent,'EXECUTE'),has_function_privilege('service_role',v_parent,'EXECUTE'));
+  PERFORM pg_temp.qa_record(p_id,'DENY',v_observed,'BLOCKING TRIGGER FUNCTION EXECUTE ACL','','',v_detail);
 END
 $$;
 SELECT pg_temp.qa_probe_l4_execute('R54-L4-TRIGGER-EXECUTE');
@@ -1172,8 +1262,9 @@ select pg_temp.qa_probe_actor_truncate('R53-C2-AUTH-PRESENCE','DENY','BLOCKING T
 -- Point-bound cleanup: this response is seeded as enviada and is reached by
 -- Teacher Exact's valid 8A + Math assignment before bounds are evaluated.
 select pg_temp.qa_probe_actor_rpc('R53-POINT-LOW','DENY','BLOCKING GRADING POINT BOUNDS','Authorized Teacher Exact rejects negative points on an already submitted response','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,-1,''R53 negative points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
-select pg_temp.qa_probe_actor_rpc('R53-POINT-HIGH','DENY','BLOCKING GRADING POINT BOUNDS','Authorized Teacher Exact rejects points above question maximum on an already submitted response','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,101,''R53 high points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
+select pg_temp.qa_probe_actor_rpc('R53-POINT-HIGH','DENY','BLOCKING GRADING POINT BOUNDS','Authorized Teacher Exact rejects points slightly above the question maximum on an already submitted response','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,2,''R53 high points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
 select pg_temp.qa_probe_actor_rpc('R53-POINT-VALID','ALLOW','BLOCKING GRADING POINT BOUNDS','Authorized Teacher Exact accepts an in-range point value on an already submitted response','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,1,''R53 valid points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
+select pg_temp.qa_probe_actor_rpc('R53-POINT-ZERO','ALLOW','BLOCKING GRADING POINT BOUNDS','Authorized Teacher Exact accepts zero points on an already submitted response','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,0,''R53 zero points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
 
 -- X7b: direct privileged maintenance invariant. RLS is not used as evidence;
 -- trigger relation, timing, event and function target are checked before the
@@ -1265,7 +1356,7 @@ select pg_temp.qa_probe_actor_dml_strict('R53-H3-Q-LIFECYCLE','DENY','BLOCKING O
 
 -- H4: Staff A cannot address any Tenant B assignment operation.
 select pg_temp.qa_probe_actor_count('R53-H4-SELECT','DENY','BLOCKING STAFF TENANT BOUNDARY','Staff A cannot select Tenant B assignment','a3000000-0000-0000-0000-000000000001','select count(*) from public.atribuicoes_academicas_professor where id=''bb100000-0000-0000-0000-000000000001''','select count(*)::text from public.atribuicoes_academicas_professor where id=''bb100000-0000-0000-0000-000000000001''');
-select pg_temp.qa_probe_actor_dml_strict('R53-H4-INSERT','DENY','BLOCKING STAFF TENANT BOUNDARY','Staff A cannot insert otherwise-valid Tenant B assignment','a3000000-0000-0000-0000-000000000001','insert into public.atribuicoes_academicas_professor(id,tenant_id,professor_id,turma_id,disciplina_id) values (''c8000000-0000-0000-0000-000000000002'',''b1000000-0000-0000-0000-000000000001'',''b4000000-0000-0000-0000-000000000001'',''b7000000-0000-0000-0000-000000000001'',''b6000000-0000-0000-0000-000000000002'')','select count(*)::text from public.atribuicoes_academicas_professor where id=''c8000000-0000-0000-0000-000000000002''');
+select pg_temp.qa_probe_actor_dml_strict('R53-H4-INSERT','DENY','BLOCKING STAFF TENANT BOUNDARY','Staff A cannot insert otherwise-valid Tenant B assignment','a3000000-0000-0000-0000-000000000001','insert into public.atribuicoes_academicas_professor(id,tenant_id,professor_id,turma_id,disciplina_id) values (''c8000000-0000-0000-0000-000000000002'',''b1000000-0000-0000-0000-000000000001'',''b4000000-0000-0000-0000-000000000001'',''b7000000-0000-0000-0000-000000000001'',''b6000000-0000-0000-0000-000000000002'')','select count(*)::text from public.tenants where id=''b1000000-0000-0000-0000-000000000001''');
 select pg_temp.qa_probe_actor_dml_strict('R53-H4-UPDATE','DENY','BLOCKING STAFF TENANT BOUNDARY','Staff A cannot update Tenant B assignment','a3000000-0000-0000-0000-000000000001','update public.atribuicoes_academicas_professor set ativo=false where id=''bb100000-0000-0000-0000-000000000001''','select ativo::text from public.atribuicoes_academicas_professor where id=''bb100000-0000-0000-0000-000000000001''');
 select pg_temp.qa_probe_actor_dml_strict('R53-H4-DELETE','DENY','BLOCKING STAFF TENANT BOUNDARY','Staff A cannot delete Tenant B assignment','a3000000-0000-0000-0000-000000000001','delete from public.atribuicoes_academicas_professor where id=''bb100000-0000-0000-0000-000000000001''','select count(*)::text from public.atribuicoes_academicas_professor where id=''bb100000-0000-0000-0000-000000000001''');
 
@@ -1292,16 +1383,12 @@ END
 $$;
 CREATE OR REPLACE FUNCTION pg_temp.qa_probe_submit_serialization(
   p_result_id text, p_attempt_id uuid, p_numero integer
-) RETURNS void
-LANGUAGE plpgsql
-AS $$
+) RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
-  v_a text := '';
-  v_b text := '';
-  v_state text := '';
-  v_message text := '';
-  v_observed text := 'INCONCLUSIVE';
-  v_after text;
+  v_a text := ''; v_b text := ''; v_state text := ''; v_message text := '';
+  v_observed text := 'INCONCLUSIVE'; v_after text;
+  v_pid1 integer; v_pid2 integer; v_wait_type text := ''; v_wait_event text := '';
+  v_overlap boolean := false; i integer;
 BEGIN
   RESET ROLE;
   PERFORM dblink_connect('sc004_r53_s1',pg_temp.qa_dblink_conninfo());
@@ -1310,54 +1397,34 @@ BEGIN
   PERFORM dblink_exec('sc004_r53_s2','SET ROLE authenticated');
   PERFORM dblink_exec('sc004_r53_s1','SET request.jwt.claim.sub = ''a3000000-0000-0000-0000-000000000012''');
   PERFORM dblink_exec('sc004_r53_s2','SET request.jwt.claim.sub = ''a3000000-0000-0000-0000-000000000012''');
-  PERFORM dblink_send_query(
-    'sc004_r53_s1',
-    'SELECT public.enviar_tentativa_avaliacao('''||p_attempt_id::text||'''::uuid,''[{"questao_id":"aa000000-0000-0000-0000-000000000001","alternativa_id":"a"}]''::jsonb)'
-  );
-  PERFORM dblink_send_query(
-    'sc004_r53_s2',
-    'SELECT public.enviar_tentativa_avaliacao('''||p_attempt_id::text||'''::uuid,''[{"questao_id":"aa000000-0000-0000-0000-000000000001","alternativa_id":"a"}]''::jsonb)'
-  );
-  BEGIN
-    SELECT v::text INTO v_a FROM dblink_get_result('sc004_r53_s1') AS t(v jsonb);
-  EXCEPTION WHEN OTHERS THEN
-    GET STACKED DIAGNOSTICS v_state=RETURNED_SQLSTATE,v_message=MESSAGE_TEXT;
-    v_a := 'ERROR:'||v_message;
-  END;
-  BEGIN
-    SELECT v::text INTO v_b FROM dblink_get_result('sc004_r53_s2') AS t(v jsonb);
-  EXCEPTION WHEN OTHERS THEN
-    GET STACKED DIAGNOSTICS v_state=RETURNED_SQLSTATE,v_message=MESSAGE_TEXT;
-    v_b := 'ERROR:'||v_message;
-  END;
+  PERFORM dblink_exec('sc004_r53_s1','SET application_name = ''sc004_r53_s1''');
+  PERFORM dblink_exec('sc004_r53_s2','SET application_name = ''sc004_r53_s2''');
+  SELECT max(pid) FILTER (WHERE application_name='sc004_r53_s1'), max(pid) FILTER (WHERE application_name='sc004_r53_s2')
+    INTO v_pid1,v_pid2 FROM pg_stat_activity WHERE application_name IN ('sc004_r53_s1','sc004_r53_s2');
+  PERFORM dblink_send_query('sc004_r53_s1','SELECT public.enviar_tentativa_avaliacao('''||p_attempt_id::text||'''::uuid,''[{"questao_id":"aa000000-0000-0000-0000-000000000001","alternativa_id":"a"}]''::jsonb)');
+  PERFORM pg_catalog.pg_sleep(0.08);
+  PERFORM dblink_send_query('sc004_r53_s2','SELECT public.enviar_tentativa_avaliacao('''||p_attempt_id::text||'''::uuid,''[{"questao_id":"aa000000-0000-0000-0000-000000000001","alternativa_id":"a"}]''::jsonb)');
+  FOR i IN 1..40 LOOP
+    SELECT coalesce(wait_event_type,''),coalesce(wait_event,'') INTO v_wait_type,v_wait_event FROM pg_stat_activity WHERE pid=v_pid2;
+    IF v_pid1 IS NOT NULL AND v_pid2 IS NOT NULL AND v_pid1 <> v_pid2 AND v_wait_type <> '' THEN v_overlap := true; EXIT; END IF;
+    PERFORM pg_catalog.pg_sleep(0.025);
+  END LOOP;
+  BEGIN SELECT v::text INTO v_a FROM dblink_get_result('sc004_r53_s1') AS t(v jsonb); EXCEPTION WHEN OTHERS THEN GET STACKED DIAGNOSTICS v_state=RETURNED_SQLSTATE,v_message=MESSAGE_TEXT; v_a='ERROR:'||v_state||':'||v_message; END;
+  BEGIN SELECT v::text INTO v_b FROM dblink_get_result('sc004_r53_s2') AS t(v jsonb); EXCEPTION WHEN OTHERS THEN GET STACKED DIAGNOSTICS v_state=RETURNED_SQLSTATE,v_message=MESSAGE_TEXT; v_b='ERROR:'||v_state||':'||v_message; END;
   RESET ROLE;
-  SELECT situacao::text||'|'||coalesce(nota::text,'')||'|'||coalesce(percentual::text,'')
-    INTO v_after
-  FROM public.avaliacao_tentativas WHERE id=p_attempt_id;
-  IF ((v_a NOT LIKE 'ERROR:%' AND v_b LIKE '%Tentativa já enviada%')
-      OR (v_b NOT LIKE 'ERROR:%' AND v_a LIKE '%Tentativa já enviada%'))
-     AND v_after LIKE 'corrigida|%'
-  THEN
-    v_observed := 'SERIALIZED';
-  ELSIF v_a NOT LIKE 'ERROR:%' AND v_b NOT LIKE 'ERROR:%' THEN
-    v_observed := 'UNSAFE_CONCURRENT_SUCCESS';
-  END IF;
-  PERFORM dblink_disconnect('sc004_r53_s1');
-  PERFORM dblink_disconnect('sc004_r53_s2');
-  PERFORM pg_temp.qa_record(
-    p_result_id,'SERIALIZED',v_observed,'BLOCKING SUBMISSION SERIALIZATION','em_andamento',v_after,
-    'session_a='||v_a||' session_b='||v_b
-  );
+  SELECT situacao::text||'|'||coalesce(nota::text,'')||'|'||coalesce(percentual::text,'') INTO v_after FROM public.avaliacao_tentativas WHERE id=p_attempt_id;
+  IF NOT v_overlap THEN v_observed := 'NOT_CONCURRENT';
+  ELSIF ((v_a NOT LIKE 'ERROR:%' AND v_b LIKE '%Tentativa já enviada%') OR (v_b NOT LIKE 'ERROR:%' AND v_a LIKE '%Tentativa já enviada%')) AND v_after LIKE 'corrigida|%' THEN v_observed := 'SERIALIZED';
+  ELSIF v_a NOT LIKE 'ERROR:%' AND v_b NOT LIKE 'ERROR:%' THEN v_observed := 'UNSAFE_CONCURRENT_SUCCESS';
+  ELSE v_observed := 'INCONCLUSIVE'; END IF;
+  PERFORM dblink_disconnect('sc004_r53_s1'); PERFORM dblink_disconnect('sc004_r53_s2');
+  PERFORM pg_temp.qa_record(p_result_id,'SERIALIZED',v_observed,'BLOCKING SUBMISSION SERIALIZATION','em_andamento',v_after,'pid1='||coalesce(v_pid1::text,'')||' pid2='||coalesce(v_pid2::text,'')||' overlap='||v_overlap::text||' wait='||v_wait_type||':'||v_wait_event||' session_a='||v_a||' session_b='||v_b);
 EXCEPTION WHEN OTHERS THEN
   GET STACKED DIAGNOSTICS v_state=RETURNED_SQLSTATE,v_message=MESSAGE_TEXT;
   BEGIN PERFORM dblink_disconnect('sc004_r53_s1'); EXCEPTION WHEN OTHERS THEN NULL; END;
   BEGIN PERFORM dblink_disconnect('sc004_r53_s2'); EXCEPTION WHEN OTHERS THEN NULL; END;
-  PERFORM pg_temp.qa_record(
-    p_result_id,'SERIALIZED','INCONCLUSIVE','BLOCKING SUBMISSION SERIALIZATION','',v_after,
-    'sqlstate='||v_state||' message='||v_message
-  );
-END
-$$;
+  PERFORM pg_temp.qa_record(p_result_id,'SERIALIZED','INCONCLUSIVE','BLOCKING SUBMISSION SERIALIZATION','',v_after,'sqlstate='||v_state||' message='||v_message);
+END $$;
 reset role;
 insert into public.avaliacao_tentativas(
   id,tenant_id,avaliacao_id,matricula_id,usuario_id,numero_tentativa,
@@ -1369,7 +1436,11 @@ insert into public.avaliacao_tentativas(
   '[{"questao_id":"aa000000-0000-0000-0000-000000000001","pontos":1}]'::jsonb,
   '{"aa000000-0000-0000-0000-000000000001":"a"}'::jsonb,1
 );
+CREATE OR REPLACE FUNCTION pg_temp.qa_pause_submit_response() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_catalog.pg_sleep(0.35); RETURN NEW; END $$;
+DROP TRIGGER IF EXISTS qa_r55_submit_pause ON public.avaliacao_respostas;
+CREATE TRIGGER qa_r55_submit_pause BEFORE INSERT ON public.avaliacao_respostas FOR EACH ROW EXECUTE FUNCTION pg_temp.qa_pause_submit_response();
 select pg_temp.qa_probe_submit_serialization('R53-M1-SERIALIZATION','ad000000-0000-0000-0000-000000000013'::uuid,2);
+DROP TRIGGER qa_r55_submit_pause ON public.avaliacao_respostas;
 
 -- M4 self-test: an absent/mismatched target is never a successful DENY proof.
 -- The row is removed after checking the observed classification so this
