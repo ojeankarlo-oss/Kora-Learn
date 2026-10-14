@@ -6,6 +6,11 @@
 -- re-runs the assertion requiring PASS.
 
 \echo 'SC004D R5.1 MUTATION QA'
+create temp table qa_mutation_results (
+  id text primary key,
+  status text not null check (status in ('KILLED','SURVIVED','INVALID')),
+  detail text not null
+);
 
 CREATE OR REPLACE FUNCTION pg_temp.qa_expect_result(p_id text, p_expected text)
 RETURNS void
@@ -34,6 +39,7 @@ BEGIN
     RAISE EXCEPTION 'mutation % was not observed as an authorization bypass: result=%, observed=%',
       p_id, coalesce(v_result, '<MISSING>'), coalesce(v_observed, '<MISSING>');
   END IF;
+  RAISE NOTICE 'MUTATION_EVIDENCE % result=% observed=%', p_id,v_result,v_observed;
 END
 $$;
 
@@ -95,6 +101,7 @@ ROLLBACK;
 select pg_temp.qa_probe_actor_dml('M1-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Staff A is denied again after tenant resolver rollback','a3000000-0000-0000-0000-000000000001','update public.questoes set enunciado=''QA M1 rollback'' where id=''bb000000-0000-0000-0000-000000000003''','select enunciado from public.questoes where id=''bb000000-0000-0000-0000-000000000003''');
 select pg_temp.qa_expect_result('M1-ROLLBACK','PASS');
 \echo 'M1_STAFF_TENANT_BOUNDARY_KILLED: PASS'
+insert into qa_mutation_results values ('M1','KILLED','Mutation expectation and rollback assertion completed with ON_ERROR_STOP');
 
 -- M2 — exact Class + Subject assessment authority.
 select pg_temp.qa_probe_actor_dml('M2-BASELINE','DENY','MUTATION NORMAL ASSERTION','Teacher Exact cannot create 7A Math assessment without exact assignment','a3000000-0000-0000-0000-000000000005','insert into public.avaliacoes(id,tenant_id,curso_id,disciplina_id,turma_id,titulo,situacao,criado_por) values (''ac300000-0000-0000-0000-000000000090'',''a1000000-0000-0000-0000-000000000001'',''a5000000-0000-0000-0000-000000000001'',''a6000000-0000-0000-0000-000000000001'',''a7000000-0000-0000-0000-000000000001'',''QA M2 baseline'',''rascunho'',''a4000000-0000-0000-0000-000000000005'')','select count(*)::text from public.avaliacoes where id=''ac300000-0000-0000-0000-000000000090''');
@@ -109,6 +116,7 @@ ROLLBACK;
 select pg_temp.qa_probe_actor_dml('M2-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Teacher Exact is denied again after scope rollback','a3000000-0000-0000-0000-000000000005','insert into public.avaliacoes(id,tenant_id,curso_id,disciplina_id,turma_id,titulo,situacao,criado_por) values (''ac300000-0000-0000-0000-000000000092'',''a1000000-0000-0000-0000-000000000001'',''a5000000-0000-0000-0000-000000000001'',''a6000000-0000-0000-0000-000000000001'',''a7000000-0000-0000-0000-000000000001'',''QA M2 rollback'',''rascunho'',''a4000000-0000-0000-0000-000000000005'')','select count(*)::text from public.avaliacoes where id=''ac300000-0000-0000-0000-000000000092''');
 select pg_temp.qa_expect_result('M2-ROLLBACK','PASS');
 \echo 'M2_EXACT_CLASS_SUBJECT_AUTHORITY_KILLED: PASS'
+insert into qa_mutation_results values ('M2','KILLED','Mutation expectation and rollback assertion completed with ON_ERROR_STOP');
 
 -- M3 — assessment-bound question cross-class authority.
 -- Teacher Exact shares the 8A + Math assignment with Teacher A, so this is
@@ -125,6 +133,7 @@ ROLLBACK;
 select pg_temp.qa_probe_actor_dml('M3-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Teacher Exact is denied again after question scope rollback','a3000000-0000-0000-0000-000000000005','update public.questoes set criado_por=''a4000000-0000-0000-0000-000000000005'' where id=''aa000000-0000-0000-0000-000000000001''','select criado_por::text from public.questoes where id=''aa000000-0000-0000-0000-000000000001''');
 select pg_temp.qa_expect_result('M3-ROLLBACK','PASS');
 \echo 'M3_QUESTION_CROSS_CLASS_AUTHORITY_KILLED: PASS'
+insert into qa_mutation_results values ('M3','KILLED','Mutation expectation and rollback assertion completed with ON_ERROR_STOP');
 
 -- M4 — direct grading-table writes.
 select pg_temp.qa_probe_actor_dml('M4-BASELINE','DENY','MUTATION NORMAL ASSERTION','Teacher X cannot update a response table directly','a3000000-0000-0000-0000-000000000005','update public.avaliacao_respostas set pontos_obtidos=999 where id=''ae000000-0000-0000-0000-000000000003''','select pontos_obtidos::text from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000000003''');
@@ -138,6 +147,7 @@ ROLLBACK;
 select pg_temp.qa_probe_actor_dml('M4-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Teacher X is denied again after direct-write policy rollback','a3000000-0000-0000-0000-000000000005','update public.avaliacao_respostas set pontos_obtidos=999 where id=''ae000000-0000-0000-0000-000000000003''','select pontos_obtidos::text from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000000003''');
 select pg_temp.qa_expect_result('M4-ROLLBACK','PASS');
 \echo 'M4_DIRECT_GRADING_WRITE_KILLED: PASS'
+insert into qa_mutation_results values ('M4','KILLED','Mutation expectation and rollback assertion completed with ON_ERROR_STOP');
 
 -- M5 — course lifecycle authority.
 select pg_temp.qa_probe_actor_dml('M5-BASELINE','DENY','MUTATION NORMAL ASSERTION','Teacher Exact cannot update Course A configuration','a3000000-0000-0000-0000-000000000005','update public.cursos set nome=''QA M5 baseline'' where id=''a5000000-0000-0000-0000-000000000001''','select nome from public.cursos where id=''a5000000-0000-0000-0000-000000000001''');
@@ -151,6 +161,7 @@ ROLLBACK;
 select pg_temp.qa_probe_actor_dml('M5-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Teacher Exact is denied again after course policy rollback','a3000000-0000-0000-0000-000000000005','update public.cursos set nome=''QA M5 rollback'' where id=''a5000000-0000-0000-0000-000000000001''','select nome from public.cursos where id=''a5000000-0000-0000-0000-000000000001''');
 select pg_temp.qa_expect_result('M5-ROLLBACK','PASS');
 \echo 'M5_COURSE_LIFECYCLE_AUTHORITY_KILLED: PASS'
+insert into qa_mutation_results values ('M5','KILLED','Mutation expectation and rollback assertion completed with ON_ERROR_STOP');
 
 -- M6 — canonical Subject authority.
 select pg_temp.qa_probe_actor_dml('M6-BASELINE','DENY','MUTATION NORMAL ASSERTION','Teacher Exact cannot update Subject A configuration','a3000000-0000-0000-0000-000000000005','update public.disciplinas set nome=''QA M6 baseline'' where id=''a6000000-0000-0000-0000-000000000001''','select nome from public.disciplinas where id=''a6000000-0000-0000-0000-000000000001''');
@@ -166,6 +177,7 @@ ROLLBACK;
 select pg_temp.qa_probe_actor_dml('M6-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Teacher Exact is denied again after staff-role rollback','a3000000-0000-0000-0000-000000000005','update public.disciplinas set nome=''QA M6 rollback'' where id=''a6000000-0000-0000-0000-000000000001''','select nome from public.disciplinas where id=''a6000000-0000-0000-0000-000000000001''');
 select pg_temp.qa_expect_result('M6-ROLLBACK','PASS');
 \echo 'M6_SUBJECT_AUTHORITY_KILLED: PASS'
+insert into qa_mutation_results values ('M6','KILLED','Mutation expectation and rollback assertion completed with ON_ERROR_STOP');
 
 -- M7 — academic-evidence deletion protection.
 select pg_temp.qa_probe_actor_dml('M7-BASELINE','DENY','MUTATION NORMAL ASSERTION','Staff A cannot delete assessment evidence','a3000000-0000-0000-0000-000000000001','delete from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''');
@@ -181,6 +193,7 @@ ROLLBACK;
 select pg_temp.qa_probe_actor_dml('M7-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Staff A is denied again after evidence guard rollback','a3000000-0000-0000-0000-000000000001','delete from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''','select count(*)::text from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''');
 select pg_temp.qa_expect_result('M7-ROLLBACK','PASS');
 \echo 'M7_ASSESSMENT_EVIDENCE_DELETE_KILLED: PASS'
+insert into qa_mutation_results values ('M7','KILLED','Mutation expectation and rollback assertion completed with ON_ERROR_STOP');
 
 -- M8 — grading attempt-state precondition.
 select pg_temp.qa_probe_actor_rpc('M8-BASELINE','DENY','MUTATION NORMAL ASSERTION','Teacher cannot grade an em_andamento attempt','a3000000-0000-0000-0000-000000000002','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000003''::uuid,1,''QA M8 baseline'')','select situacao::text||'':''||corrigida::text from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000003''');
@@ -202,6 +215,7 @@ ROLLBACK;
 select pg_temp.qa_probe_actor_rpc('M8-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Teacher is denied again after grading lifecycle rollback','a3000000-0000-0000-0000-000000000002','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000003''::uuid,1,''QA M8 rollback'')','select situacao::text||'':''||corrigida::text from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000003''');
 select pg_temp.qa_expect_result('M8-ROLLBACK','PASS');
 \echo 'M8_GRADING_ATTEMPT_STATE_KILLED: PASS'
+insert into qa_mutation_results values ('M8','KILLED','Mutation expectation and rollback assertion completed with ON_ERROR_STOP');
 
 -- No M*-MUTATED result remains: each was checked as FAIL and removed before
 -- rollback. The rows below are the normal baseline/rollback assertions only.
@@ -225,6 +239,7 @@ ROLLBACK;
 select pg_temp.qa_probe_actor_rpc('M9-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Teacher A3 is denied again after grading authorization rollback','a3000000-0000-0000-0000-000000000004','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,1,''QA M9 rollback'')','select situacao::text||'':''||corrigida::text from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
 select pg_temp.qa_expect_result('M9-ROLLBACK','PASS');
 \echo 'M9_GRADING_AUTHORIZATION_KILLED: PASS';
+insert into qa_mutation_results values ('M9','KILLED','Mutation expectation and rollback assertion completed with ON_ERROR_STOP');
 
 -- M10 — X11 owner DELETE guard. Both the helper's unlinked-question owner
 -- branch and the policy's creator condition are weakened inside the mutation.
@@ -243,6 +258,7 @@ ROLLBACK;
 select pg_temp.qa_probe_actor_dml('M10-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Teacher Exact is denied again after X11 rollback','a3000000-0000-0000-0000-000000000005','delete from public.questoes where id=''aa000000-0000-0000-0000-000000000008''','select count(*)::text from public.questoes where id=''aa000000-0000-0000-0000-000000000008''');
 select pg_temp.qa_expect_result('M10-ROLLBACK','PASS');
 \echo 'M10_OWNER_DELETE_GUARD_KILLED: PASS';
+insert into qa_mutation_results values ('M10','KILLED','Mutation expectation and rollback assertion completed with ON_ERROR_STOP');
 
 -- M11 — post-evidence academic configuration immutability.
 select pg_temp.qa_probe_actor_dml('M11-BASELINE','DENY','MUTATION NORMAL ASSERTION','Staff cannot change nota_minima after evidence exists','a3000000-0000-0000-0000-000000000001','update public.avaliacoes set nota_minima=99 where id=''ac000000-0000-0000-0000-000000000001''','select nota_minima::text from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''');
@@ -257,6 +273,7 @@ ROLLBACK;
 select pg_temp.qa_probe_actor_dml('M11-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Staff is denied again after post-evidence guard rollback','a3000000-0000-0000-0000-000000000001','update public.avaliacoes set nota_minima=99 where id=''ac000000-0000-0000-0000-000000000001''','select nota_minima::text from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000001''');
 select pg_temp.qa_expect_result('M11-ROLLBACK','PASS');
 \echo 'M11_POST_EVIDENCE_IMMUTABILITY_KILLED: PASS';
+insert into qa_mutation_results values ('M11','KILLED','Mutation expectation and rollback assertion completed with ON_ERROR_STOP');
 
 
 -- R5.3 mutation helper for catalog invariants whose safe state is not ALLOW.
@@ -271,6 +288,7 @@ BEGIN
     RAISE EXCEPTION 'mutation % expected FAIL/% but observed result=% state=%',
       p_id, p_observed, coalesce(v_result,'<MISSING>'), coalesce(v_actual,'<MISSING>');
   END IF;
+  RAISE NOTICE 'MUTATION_EVIDENCE % result=% observed=%', p_id,v_result,v_actual;
 END
 $$;
 
@@ -339,6 +357,7 @@ ROLLBACK;
 select pg_temp.qa_probe_evidence_trigger('M12-STATEMENT-ROLLBACK');
 select pg_temp.qa_expect_result('M12-STATEMENT-ROLLBACK','PASS');
 \echo 'M12_EVIDENCE_DELETE_TRIGGER_KILLED: PASS (event/disabled/function/WHEN(false)/FOR EACH STATEMENT)';
+insert into qa_mutation_results values ('M12','KILLED','Mutation expectation and rollback assertion completed with ON_ERROR_STOP');
 
 
 -- M13 — H2 composition ownership: remove only owner-specific composition policies.
@@ -380,6 +399,7 @@ ROLLBACK;
 select pg_temp.qa_probe_actor_dml('M13-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Teacher B is denied after H2 policy rollback','a3000000-0000-0000-0000-000000000005','insert into public.avaliacao_questoes(avaliacao_id,questao_id,ordem,tenant_id) values (''ac000000-0000-0000-0000-000000000011'',''aa000000-0000-0000-0000-000000000010'',2,''a1000000-0000-0000-0000-000000000001'')','select count(*)::text from public.avaliacao_questoes where avaliacao_id=''ac000000-0000-0000-0000-000000000011''');
 select pg_temp.qa_expect_result('M13-ROLLBACK','PASS');
 \echo 'M13_COMPOSITION_OWNERSHIP_KILLED: PASS'
+insert into qa_mutation_results values ('M13','KILLED','Mutation expectation and rollback assertion completed with ON_ERROR_STOP');
 
 -- M14 — H3 ownership provenance: remove only the update guard.
 BEGIN;
@@ -396,6 +416,7 @@ ROLLBACK;
 select pg_temp.qa_probe_actor_dml('M14-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Teacher B is denied after H3 guard rollback','a3000000-0000-0000-0000-000000000005','update public.avaliacoes set criado_por=''a4000000-0000-0000-0000-000000000005'' where id=''ac000000-0000-0000-0000-000000000011''','select criado_por::text from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000011''');
 select pg_temp.qa_expect_result('M14-ROLLBACK','PASS');
 \echo 'M14_AUTHORSHIP_IMMUTABILITY_KILLED: PASS'
+insert into qa_mutation_results values ('M14','KILLED','Mutation expectation and rollback assertion completed with ON_ERROR_STOP');
 
 -- M15 — H4 staff tenant boundary: remove only the tenant predicate.
 BEGIN;
@@ -409,6 +430,7 @@ ROLLBACK;
 select pg_temp.qa_probe_actor_count('M15-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Staff A is denied after H4 policy rollback','a3000000-0000-0000-0000-000000000001','select count(*) from public.atribuicoes_academicas_professor where id=''bb100000-0000-0000-0000-000000000001''','select count(*)::text from public.atribuicoes_academicas_professor where id=''bb100000-0000-0000-0000-000000000001''');
 select pg_temp.qa_expect_result('M15-ROLLBACK','PASS');
 \echo 'M15_STAFF_TENANT_BOUNDARY_KILLED: PASS'
+insert into qa_mutation_results values ('M15','KILLED','Mutation expectation and rollback assertion completed with ON_ERROR_STOP');
 
 -- M16/M17 — C2 explicit role ACL mutations, separately authenticated and anon.
 BEGIN;
@@ -428,6 +450,8 @@ ROLLBACK;
 select pg_temp.qa_probe_actor_truncate('M17-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','anon cannot truncate after ACL rollback','anon','avaliacao_respostas','select count(*)::text from public.avaliacao_respostas');
 select pg_temp.qa_expect_result('M17-ROLLBACK','PASS');
 \echo 'M16_M17_TRUNCATE_ACL_KILLED: PASS'
+insert into qa_mutation_results values ('M16','KILLED','Mutation expectation and rollback assertion completed with ON_ERROR_STOP');
+insert into qa_mutation_results values ('M17','KILLED','Mutation expectation and rollback assertion completed with ON_ERROR_STOP');
 
 -- M18/M19 — C1 search_path invariant mutations.
 BEGIN;
@@ -447,21 +471,24 @@ ROLLBACK;
 select pg_temp.qa_record('M19-ROLLBACK','SAFE',CASE WHEN EXISTS (SELECT 1 FROM pg_proc p WHERE p.oid='public.enviar_tentativa_avaliacao(uuid,jsonb)'::regprocedure AND COALESCE(array_to_string(p.proconfig,','),'') LIKE '%search_path=""%') THEN 'SAFE' ELSE 'UNSAFE' END,'MUTATION ROLLBACK ASSERTION','','','search_path restored');
 select pg_temp.qa_expect_result('M19-ROLLBACK','PASS');
 \echo 'M18_M19_SECURITY_DEFINER_SEARCH_PATH_KILLED: PASS'
+insert into qa_mutation_results values ('M18','KILLED','Mutation expectation and rollback assertion completed with ON_ERROR_STOP');
+insert into qa_mutation_results values ('M19','KILLED','Mutation expectation and rollback assertion completed with ON_ERROR_STOP');
 
 -- M20 — INVALID. The prior design replaced the entire submit RPC and also
 -- removed the terminal CAS, so it was not a narrow FOR UPDATE-only mutation.
 -- R5.6 records the control as INVALID instead of claiming KILLED/SURVIVED;
 -- no production RPC is re-emitted or mutated by this harness.
 select pg_temp.qa_record('M20-INVALID','INVALID','INVALID','MUTATION INVALID','','','Wholesale submit-RPC replacement cannot prove a FOR UPDATE-only mutation and removes unrelated lifecycle/CAS logic');
-select pg_temp.qa_expect_result('M20-INVALID','PASS');
-\echo 'M20_SUBMISSION_SERIALIZATION_INVALID: PASS (broad replacement excluded from killed/survived counts)'
+select pg_temp.qa_expect_result('M20-INVALID','INVALID');
+\echo 'M20_SUBMISSION_SERIALIZATION: INVALID (excluded from KILLED/SURVIVED and valid-test PASS counts)'
+insert into qa_mutation_results values ('M20','INVALID','Broad submit replacement is not a serialization-only mutation');
 
 -- M21 — HARNESS SELF-TEST, not a control mutation. A nonexistent target is
 -- deliberately ambiguous and must be recorded as INCONCLUSIVE/FAIL, never
 -- DENY/PASS; its result is removed from mutation-control counts below.
 select pg_temp.qa_probe_actor_dml_bound('M21-ZERO-ROW','INCONCLUSIVE','HARNESS SELF-TEST','Security-critical nonexistent DELETE target must not be treated as a denial','a3000000-0000-0000-0000-000000000005','aa000000-0000-0000-0000-000000009999','aa000000-0000-0000-0000-000000009999','delete from public.questoes where id=$1::uuid','select id::text, coalesce(enunciado,''<NULL>'') from public.questoes where id=$1::uuid');
 select pg_temp.qa_expect_result('M21-ZERO-ROW','PASS');
-DELETE FROM qa_results WHERE id='M21-ZERO-ROW';
+select pg_temp.qa_archive_selftest('M21-ZERO-ROW','INCONCLUSIVE','TARGET_NOT_FOUND','');
 \echo 'M21_HARNESS_SELF_TEST_ZERO_ROW: PASS (observed INCONCLUSIVE; excluded from control counts)'
 
 -- M22/M23 — point bounds. Each mutation is generated from the exact current
@@ -561,6 +588,8 @@ ROLLBACK;
 select pg_temp.qa_probe_actor_rpc('M23-ROLLBACK','DENY','MUTATION ROLLBACK ASSERTION','Negative points are denied again after narrow lower-bound rollback','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,-1,''M23 rollback negative points'')','select situacao::text||'':''||corrigida::text||'':''||coalesce(pontos_obtidos::text,''NULL'') from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
 select pg_temp.qa_expect_result('M23-ROLLBACK','PASS');
 \echo 'M22_M23_POINT_BOUNDS_KILLED: PASS (narrow upper/lower predicates proven by normalized source diff)'
+insert into qa_mutation_results values ('M22','KILLED','Mutation expectation and rollback assertion completed with ON_ERROR_STOP');
+insert into qa_mutation_results values ('M23','KILLED','Mutation expectation and rollback assertion completed with ON_ERROR_STOP');
 
 -- M24 — L4 trigger-only helper EXECUTE surface.
 select pg_temp.qa_probe_l4_execute('M24-BASELINE');
@@ -575,3 +604,34 @@ ROLLBACK;
 select pg_temp.qa_probe_l4_execute('M24-ROLLBACK');
 select pg_temp.qa_expect_result('M24-ROLLBACK','PASS');
 \echo 'M24_TRIGGER_EXECUTE_ACL_KILLED: PASS'
+insert into qa_mutation_results values ('M24','KILLED','Mutation expectation and rollback assertion completed with ON_ERROR_STOP');
+
+-- INVALID and harness self-tests are never part of the mutation kill ratio.
+\echo 'SC004 MUTATION RESULTS'
+select * from qa_mutation_results order by substring(id from 2)::integer;
+select count(*) filter (where status='KILLED') as killed,
+       count(*) filter (where status='SURVIVED') as survived,
+       count(*) filter (where status='INVALID') as invalid,
+       count(*) filter (where status in ('KILLED','SURVIVED')) as valid_mutations
+from qa_mutation_results;
+\echo 'SC004 VALID TEST COUNTS (INVALID excluded)'
+select classification,result,count(*) from qa_results
+where result <> 'INVALID' group by classification,result order by classification,result;
+select * from qa_results where result='INVALID';
+select * from qa_selftest_results order by id;
+select result,count(*) as harness_selftest_count from qa_selftest_results group by result order by result;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM qa_results WHERE result IN ('FAIL','STOP','INCONCLUSIVE'))
+     OR EXISTS (SELECT 1 FROM qa_mutation_results WHERE status='SURVIVED') THEN
+    RAISE EXCEPTION 'SC004 R5.8 validation failed closed';
+  END IF;
+  IF (SELECT result FROM qa_results WHERE id='M20-INVALID') IS DISTINCT FROM 'INVALID' THEN
+    RAISE EXCEPTION 'M20 must remain INVALID';
+  END IF;
+  IF (SELECT count(*) FROM qa_mutation_results WHERE status='KILLED') <> 22
+     OR (SELECT count(*) FROM qa_mutation_results WHERE status='INVALID') <> 1
+     OR EXISTS (SELECT 1 FROM qa_mutation_results WHERE id='M21') THEN
+    RAISE EXCEPTION 'expected 22 valid control groups plus M20 INVALID; M21 is a self-test';
+  END IF;
+END $$;
