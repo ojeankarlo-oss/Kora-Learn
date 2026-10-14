@@ -325,7 +325,20 @@ DELETE FROM qa_results WHERE id='M12-WHEN-FALSE-MUTATED';
 ROLLBACK;
 select pg_temp.qa_probe_evidence_trigger('M12-WHEN-FALSE-ROLLBACK');
 select pg_temp.qa_expect_result('M12-WHEN-FALSE-ROLLBACK','PASS');
-\echo 'M12_EVIDENCE_DELETE_TRIGGER_KILLED: PASS (event/disabled/function/WHEN(false))';
+BEGIN;
+-- This fault replaces the currently installed trigger only for this rolled-back
+-- catalog mutation; no healthy trigger is created before the detector runs.
+DROP TRIGGER trg_sc004_assessment_evidence_delete ON public.avaliacoes;
+CREATE TRIGGER trg_sc004_assessment_evidence_delete
+  BEFORE DELETE ON public.avaliacoes
+  FOR EACH STATEMENT EXECUTE FUNCTION public.sc004_block_assessment_evidence_delete();
+select pg_temp.qa_probe_evidence_trigger('M12-STATEMENT-MUTATED');
+select pg_temp.qa_expect_mutation_state('M12-STATEMENT-MUTATED','ABSENT');
+DELETE FROM qa_results WHERE id='M12-STATEMENT-MUTATED';
+ROLLBACK;
+select pg_temp.qa_probe_evidence_trigger('M12-STATEMENT-ROLLBACK');
+select pg_temp.qa_expect_result('M12-STATEMENT-ROLLBACK','PASS');
+\echo 'M12_EVIDENCE_DELETE_TRIGGER_KILLED: PASS (event/disabled/function/WHEN(false)/FOR EACH STATEMENT)';
 
 
 -- M13 — H2 composition ownership: remove only owner-specific composition policies.
@@ -446,7 +459,7 @@ select pg_temp.qa_expect_result('M20-INVALID','PASS');
 -- M21 — HARNESS SELF-TEST, not a control mutation. A nonexistent target is
 -- deliberately ambiguous and must be recorded as INCONCLUSIVE/FAIL, never
 -- DENY/PASS; its result is removed from mutation-control counts below.
-select pg_temp.qa_probe_actor_dml_bound('M21-ZERO-ROW','INCONCLUSIVE','HARNESS SELF-TEST','Security-critical nonexistent DELETE target must not be treated as a denial','a3000000-0000-0000-0000-000000000005','aa000000-0000-0000-0000-000000009999','delete from public.questoes where id=''aa000000-0000-0000-0000-000000009999''','select id::text, coalesce(enunciado,''<NULL>'') from public.questoes where id=''aa000000-0000-0000-0000-000000009999''');
+select pg_temp.qa_probe_actor_dml_bound('M21-ZERO-ROW','INCONCLUSIVE','HARNESS SELF-TEST','Security-critical nonexistent DELETE target must not be treated as a denial','a3000000-0000-0000-0000-000000000005','aa000000-0000-0000-0000-000000009999','aa000000-0000-0000-0000-000000009999','delete from public.questoes where id=$1::uuid','select id::text, coalesce(enunciado,''<NULL>'') from public.questoes where id=$1::uuid');
 select pg_temp.qa_expect_result('M21-ZERO-ROW','PASS');
 DELETE FROM qa_results WHERE id='M21-ZERO-ROW';
 \echo 'M21_HARNESS_SELF_TEST_ZERO_ROW: PASS (observed INCONCLUSIVE; excluded from control counts)'

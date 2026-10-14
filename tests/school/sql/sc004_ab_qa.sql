@@ -167,13 +167,28 @@ begin
     p_detail || ' count=' || coalesce(v_count::text,'') || ' sqlstate=' || v_state || ' message=' || v_message);
 end $$;
 
--- R5.6 bound strict contract: the state query must return (target_id, state)
--- for the same logical target exercised by p_sql. A scalar count/boolean is
--- not existence evidence; mismatches, NULL state, malformed SQL and absent
--- targets remain INCONCLUSIVE.
+-- R5.7 bound contract: operation and state each receive the
+-- same target through EXECUTE ... USING. A caller that declares different
+-- identities is rejected before the protected operation runs; no UUID is
+-- inferred from arbitrary SQL text. Every bound SQL must explicitly consume
+-- parameter $1, so the identity is structurally supplied by this contract.
+create or replace function pg_temp.qa_bound_contract_valid(
+  p_operation_target_id text, p_declared_target_id text,
+  p_sql text, p_target_state_sql text
+) returns boolean language sql immutable as $$
+  select coalesce(p_operation_target_id is not null
+    and p_declared_target_id is not null
+    and p_operation_target_id is not distinct from p_declared_target_id
+    and strpos(p_sql,'$1') > 0
+    and strpos(p_target_state_sql,'$1') > 0, false)
+$$;
+
+-- Legacy scalar helpers remain unchanged; security-critical callers use the bound contract above.
+
 create or replace function pg_temp.qa_probe_actor_count_bound(
   p_id text, p_expected text, p_classification text, p_detail text,
-  p_actor_sub text, p_target_id text, p_sql text, p_target_state_sql text
+  p_actor_sub text, p_operation_target_id text, p_declared_target_id text,
+  p_sql text, p_target_state_sql text
 ) returns void language plpgsql as $$
 declare
   v_count bigint := 0;
@@ -185,34 +200,43 @@ declare
   v_state text := '';
   v_message text := '';
   v_before_bound boolean := false;
+  v_contract boolean := false;
 begin
   reset role;
+  v_contract := pg_temp.qa_bound_contract_valid(
+    p_operation_target_id,p_declared_target_id,p_sql,p_target_state_sql
+  );
   begin
-    execute p_target_state_sql into v_before_id, v_before;
-    v_before_bound := v_before_id is not null
-      and v_before_id is not distinct from p_target_id
+    execute p_target_state_sql into v_before_id, v_before using p_declared_target_id;
+    v_before_bound := v_contract
+      and v_before_id is not null
+      and v_before_id is not distinct from p_declared_target_id
       and v_before is not null;
   exception when others then
     get stacked diagnostics v_state=returned_sqlstate,v_message=message_text;
   end;
-  begin
-    set local role authenticated;
-    perform set_config('request.jwt.claim.sub',p_actor_sub,false);
-    execute p_sql into v_count;
-    v_observed := case when coalesce(v_count,0) > 0 then 'ALLOW'
-                       when v_before_bound then 'DENY'
-                       else 'INCONCLUSIVE' end;
-  exception when others then
-    get stacked diagnostics v_state=returned_sqlstate,v_message=message_text;
-    v_observed := case when v_state in ('42501','42503') and v_before_bound then 'DENY'
-                       else 'INCONCLUSIVE' end;
-  end;
+  if v_contract then
+    begin
+      set local role authenticated;
+      perform set_config('request.jwt.claim.sub',p_actor_sub,false);
+      execute p_sql into v_count using p_operation_target_id;
+      v_observed := case when coalesce(v_count,0) > 0 then 'ALLOW'
+                         when v_before_bound then 'DENY'
+                         else 'INCONCLUSIVE' end;
+    exception when others then
+      get stacked diagnostics v_state=returned_sqlstate,v_message=message_text;
+      v_observed := case when v_state in ('42501','42503') and v_before_bound then 'DENY'
+                         else 'INCONCLUSIVE' end;
+    end;
+  end if;
   reset role;
   begin
-    execute p_target_state_sql into v_after_id, v_after;
-    if v_after_id is distinct from p_target_id then
+    execute p_target_state_sql into v_after_id, v_after using p_declared_target_id;
+    if not v_contract or not v_before_bound
+       or v_after_id is distinct from p_declared_target_id
+       or v_after is null then
       v_observed := 'INCONCLUSIVE';
-    elsif v_before_bound and v_after is distinct from v_before then
+    elsif v_before is distinct from v_after then
       v_observed := 'STATE_CHANGED';
     end if;
   exception when others then
@@ -220,7 +244,10 @@ begin
     v_observed := 'INCONCLUSIVE';
   end;
   perform pg_temp.qa_record(p_id,p_expected,v_observed,p_classification,v_before,v_after,
-    p_detail||' target_id='||p_target_id||' before_id='||coalesce(v_before_id,'<NULL>')||' after_id='||coalesce(v_after_id,'<NULL>')||' count='||coalesce(v_count::text,'')||' sqlstate='||v_state||' message='||v_message);
+    p_detail||' op_target_id='||coalesce(p_operation_target_id,'<NULL>')||
+    ' declared_target_id='||coalesce(p_declared_target_id,'<NULL>')||
+    ' before_id='||coalesce(v_before_id,'<NULL>')||' after_id='||coalesce(v_after_id,'<NULL>')||
+    ' count='||coalesce(v_count::text,'')||' sqlstate='||v_state||' message='||v_message);
 end $$;
 
 create or replace function pg_temp.qa_probe_actor_dml(
@@ -270,7 +297,8 @@ end $$;
 -- proof.
 create or replace function pg_temp.qa_probe_actor_dml_bound(
   p_id text, p_expected text, p_classification text, p_detail text,
-  p_actor_sub text, p_target_id text, p_sql text, p_target_state_sql text
+  p_actor_sub text, p_operation_target_id text, p_declared_target_id text,
+  p_sql text, p_target_state_sql text
 ) returns void language plpgsql as $$
 declare
   v_rows integer := 0;
@@ -282,42 +310,51 @@ declare
   v_state text := '';
   v_message text := '';
   v_before_bound boolean := false;
+  v_contract boolean := false;
 begin
   reset role;
+  v_contract := pg_temp.qa_bound_contract_valid(
+    p_operation_target_id,p_declared_target_id,p_sql,p_target_state_sql
+  );
   begin
-    execute p_target_state_sql into v_before_id, v_before;
-    v_before_bound := v_before_id is not null
-      and v_before_id is not distinct from p_target_id
+    execute p_target_state_sql into v_before_id, v_before using p_declared_target_id;
+    v_before_bound := v_contract
+      and v_before_id is not null
+      and v_before_id is not distinct from p_declared_target_id
       and v_before is not null;
   exception when others then
     get stacked diagnostics v_state=returned_sqlstate,v_message=message_text;
   end;
-  begin
-    set local role authenticated;
-    perform set_config('request.jwt.claim.sub',p_actor_sub,false);
-    execute p_sql;
-    get diagnostics v_rows = row_count;
-    v_observed := case when v_rows > 0 then 'ALLOW'
-                       when v_before_bound then 'DENY'
-                       else 'INCONCLUSIVE' end;
-    raise exception using message='__QA_ROLLBACK__';
-  exception when others then
-    get stacked diagnostics v_state=returned_sqlstate,v_message=message_text;
-    if v_message <> '__QA_ROLLBACK__' then
-      v_observed := case
-        when v_state in ('42501','42503') and v_before_bound then 'DENY'
-        when v_state = '23503' and v_message = 'update or delete on table "questoes" violates foreign key constraint "avaliacao_questoes_questao_id_fkey" on table "avaliacao_questoes"' and v_before_bound then 'DENY'
-        when v_state = '23514' and v_message in ('A autoria da avaliação não pode ser transferida por um docente','Avaliação com evidência acadêmica não pode ter sua estrutura ou configuração alterada') and v_before_bound then 'DENY'
-        else 'INCONCLUSIVE'
-      end;
-    end if;
-  end;
+  if v_contract then
+    begin
+      set local role authenticated;
+      perform set_config('request.jwt.claim.sub',p_actor_sub,false);
+      execute p_sql using p_operation_target_id;
+      get diagnostics v_rows = row_count;
+      v_observed := case when v_rows > 0 then 'ALLOW'
+                         when v_before_bound then 'DENY'
+                         else 'INCONCLUSIVE' end;
+      raise exception using message='__QA_ROLLBACK__';
+    exception when others then
+      get stacked diagnostics v_state=returned_sqlstate,v_message=message_text;
+      if v_message <> '__QA_ROLLBACK__' then
+        v_observed := case
+          when v_state in ('42501','42503') and v_before_bound then 'DENY'
+          when v_state = '23503' and v_message = 'update or delete on table "questoes" violates foreign key constraint "avaliacao_questoes_questao_id_fkey" on table "avaliacao_questoes"' and v_before_bound then 'DENY'
+          when v_state = '23514' and v_message in ('A autoria da avaliação não pode ser transferida por um docente','Avaliação com evidência acadêmica não pode ter sua estrutura ou configuração alterada') and v_before_bound then 'DENY'
+          else 'INCONCLUSIVE'
+        end;
+      end if;
+    end;
+  end if;
   reset role;
   begin
-    execute p_target_state_sql into v_after_id, v_after;
-    if v_after_id is distinct from p_target_id then
+    execute p_target_state_sql into v_after_id, v_after using p_declared_target_id;
+    if not v_contract or not v_before_bound
+       or v_after_id is distinct from p_declared_target_id
+       or v_after is null then
       v_observed := 'INCONCLUSIVE';
-    elsif v_before_bound and v_after is distinct from v_before then
+    elsif v_before is distinct from v_after then
       v_observed := 'STATE_CHANGED';
     end if;
   exception when others then
@@ -325,11 +362,13 @@ begin
     v_observed := 'INCONCLUSIVE';
   end;
   perform pg_temp.qa_record(p_id,p_expected,v_observed,p_classification,v_before,v_after,
-    p_detail || ' target_id=' || p_target_id || ' before_id=' || coalesce(v_before_id,'<NULL>') || ' after_id=' || coalesce(v_after_id,'<NULL>') || ' rows=' || v_rows || ' sqlstate=' || v_state || ' message=' || v_message);
+    p_detail || ' op_target_id=' || coalesce(p_operation_target_id,'<NULL>') ||
+    ' declared_target_id=' || coalesce(p_declared_target_id,'<NULL>') ||
+    ' before_id=' || coalesce(v_before_id,'<NULL>') || ' after_id=' || coalesce(v_after_id,'<NULL>') ||
+    ' rows=' || v_rows || ' sqlstate=' || v_state || ' message=' || v_message);
 end $$;
 
-
--- Variant for RLS-specific assertions. The setup runs in the same
+-- Variant for RLS-specific assertions.-- Variant for RLS-specific assertions. The setup runs in the same
 -- subtransaction as the protected DML and is rolled back with the probe.
 create or replace function pg_temp.qa_probe_actor_dml_setup(
   p_id text, p_expected text, p_classification text, p_detail text,
@@ -413,7 +452,8 @@ end $$;
 
 create or replace function pg_temp.qa_probe_actor_rpc_bound(
   p_id text, p_expected text, p_classification text, p_detail text,
-  p_actor_sub text, p_setup_sql text, p_target_id text, p_sql text, p_target_state_sql text
+  p_actor_sub text, p_setup_sql text, p_operation_target_id text,
+  p_declared_target_id text, p_sql text, p_target_state_sql text
 ) returns void language plpgsql as $$
 declare
   v_json jsonb;
@@ -425,38 +465,47 @@ declare
   v_state text := '';
   v_message text := '';
   v_before_bound boolean := false;
+  v_contract boolean := false;
 begin
   reset role;
-  if nullif(p_setup_sql,'') is not null then execute p_setup_sql; end if;
+  v_contract := pg_temp.qa_bound_contract_valid(
+    p_operation_target_id,p_declared_target_id,p_sql,p_target_state_sql
+  );
   begin
-    execute p_target_state_sql into v_before_id, v_before;
-    v_before_bound := v_before_id is not null
-      and v_before_id is not distinct from p_target_id
+    execute p_target_state_sql into v_before_id, v_before using p_declared_target_id;
+    v_before_bound := v_contract
+      and v_before_id is not null
+      and v_before_id is not distinct from p_declared_target_id
       and v_before is not null;
   exception when others then
     get stacked diagnostics v_state=returned_sqlstate,v_message=message_text;
   end;
-  begin
-    set local role authenticated;
-    perform set_config('request.jwt.claim.sub',p_actor_sub,false);
-    execute p_sql into v_json;
-    v_observed := 'ALLOW';
-    raise exception using message='__QA_ROLLBACK__';
-  exception when others then
-    get stacked diagnostics v_state=returned_sqlstate,v_message=message_text;
-    if v_message <> '__QA_ROLLBACK__' then
-      v_observed := case
-        when v_state in ('42501','42503') and v_before_bound then 'DENY'
-        when v_message in ('Resposta não encontrada','Tentativa não encontrada','Avaliação não encontrada','Professor sem assignment exato para corrigir resposta','Somente docentes podem corrigir respostas','Tentativa ainda não está enviada para correção','Tentativa mudou de estado durante a correção','Pontuação fora do limite da questão','Resposta já corrigida') and v_before_bound then 'DENY'
-        else 'INCONCLUSIVE' end;
-    end if;
-  end;
+  if v_contract then
+    begin
+      if nullif(p_setup_sql,'') is not null then execute p_setup_sql; end if;
+      set local role authenticated;
+      perform set_config('request.jwt.claim.sub',p_actor_sub,false);
+      execute p_sql into v_json using p_operation_target_id;
+      v_observed := 'ALLOW';
+      raise exception using message='__QA_ROLLBACK__';
+    exception when others then
+      get stacked diagnostics v_state=returned_sqlstate,v_message=message_text;
+      if v_message <> '__QA_ROLLBACK__' then
+        v_observed := case
+          when v_state in ('42501','42503') and v_before_bound then 'DENY'
+          when v_message in ('Resposta não encontrada','Tentativa não encontrada','Avaliação não encontrada','Professor sem assignment exato para corrigir resposta','Somente docentes podem corrigir respostas','Tentativa ainda não está enviada para correção','Tentativa mudou de estado durante a correção','Pontuação fora do limite da questão','Resposta já corrigida') and v_before_bound then 'DENY'
+          else 'INCONCLUSIVE' end;
+      end if;
+    end;
+  end if;
   reset role;
   begin
-    execute p_target_state_sql into v_after_id, v_after;
-    if v_after_id is distinct from p_target_id then
+    execute p_target_state_sql into v_after_id, v_after using p_declared_target_id;
+    if not v_contract or not v_before_bound
+       or v_after_id is distinct from p_declared_target_id
+       or v_after is null then
       v_observed := 'INCONCLUSIVE';
-    elsif v_before_bound and v_after is distinct from v_before then
+    elsif v_before is distinct from v_after then
       v_observed := 'STATE_CHANGED';
     end if;
   exception when others then
@@ -464,9 +513,11 @@ begin
     v_observed := 'INCONCLUSIVE';
   end;
   perform pg_temp.qa_record(p_id,p_expected,v_observed,p_classification,v_before,v_after,
-    p_detail||' target_id='||p_target_id||' before_id='||coalesce(v_before_id,'<NULL>')||' after_id='||coalesce(v_after_id,'<NULL>')||' sqlstate='||v_state||' message='||v_message);
+    p_detail||' op_target_id='||coalesce(p_operation_target_id,'<NULL>')||
+    ' declared_target_id='||coalesce(p_declared_target_id,'<NULL>')||
+    ' before_id='||coalesce(v_before_id,'<NULL>')||' after_id='||coalesce(v_after_id,'<NULL>')||
+    ' sqlstate='||v_state||' message='||v_message);
 end $$;
-
 
 create or replace function pg_temp.qa_probe_actor_rpc_no_gabarito(
   p_id text, p_expected text, p_classification text, p_detail text,
@@ -978,7 +1029,8 @@ select pg_temp.qa_probe_actor_rpc('R52-GRADE-WRONG-CLASS','DENY','BLOCKING GRADI
 select pg_temp.qa_probe_actor_rpc('R52-GRADE-WRONG-SUBJECT','DENY','BLOCKING GRADING AUTHORITY','Teacher Exact cannot grade a submitted 8A Physics response','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000001''::uuid,1,''QA wrong subject grading'')','select situacao::text||'':''||corrigida::text from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000001''');
 select pg_temp.qa_probe_actor_rpc('R52-GRADE-TEACHER-B','DENY','BLOCKING GRADING AUTHORITY','Tenant B Teacher cannot grade Tenant A submitted response','b3000000-0000-0000-0000-000000000001','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,1,''QA Teacher B grading'')','select situacao::text||'':''||corrigida::text from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
 select pg_temp.qa_probe_actor_rpc('R52-GRADE-STAFF-B','DENY','BLOCKING GRADING AUTHORITY','Tenant B Staff cannot grade Tenant A submitted response','b3000000-0000-0000-0000-000000000002','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000000020''::uuid,1,''QA Staff B grading'')','select situacao::text||'':''||corrigida::text from public.avaliacao_tentativas t join public.avaliacao_respostas r on r.tentativa_id=t.id where r.id=''ae000000-0000-0000-0000-000000000020''');
-select pg_temp.qa_probe_actor_rpc('R52-GRADE-FORGED-ID','DENY','BLOCKING GRADING AUTHORITY','Teacher Exact cannot grade a forged response identifier','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000009999''::uuid,1,''QA forged grading id'')','select count(*)::text from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000009999''');select pg_temp.qa_probe_actor_rpc_bound('R55-ZERO-ROW-RPC-SELFTEST','INCONCLUSIVE','HARNESS SELF-TEST','A nonexistent grading target must never be recorded as DENY','a3000000-0000-0000-0000-000000000005','','ae000000-0000-0000-0000-000000009998','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000009998''::uuid,1,''QA nonexistent self-test'')','select r.id::text, coalesce(t.situacao::text,''<NULL>'')||'':''||coalesce(r.corrigida::text,''<NULL>'') from public.avaliacao_respostas r join public.avaliacao_tentativas t on t.id=r.tentativa_id where r.id=''ae000000-0000-0000-0000-000000009998''');
+select pg_temp.qa_probe_actor_rpc('R52-GRADE-FORGED-ID','DENY','BLOCKING GRADING AUTHORITY','Teacher Exact cannot grade a forged response identifier','a3000000-0000-0000-0000-000000000005','','select public.corrigir_resposta_avaliacao(''ae000000-0000-0000-0000-000000009999''::uuid,1,''QA forged grading id'')','select count(*)::text from public.avaliacao_respostas where id=''ae000000-0000-0000-0000-000000009999''');
+select pg_temp.qa_probe_actor_rpc_bound('R55-ZERO-ROW-RPC-SELFTEST','INCONCLUSIVE','HARNESS SELF-TEST','A nonexistent grading target must never be recorded as DENY','a3000000-0000-0000-0000-000000000005','','ae000000-0000-0000-0000-000000009998','ae000000-0000-0000-0000-000000009998','select public.corrigir_resposta_avaliacao($1::uuid,1,''QA nonexistent self-test'')','select r.id::text, coalesce(t.situacao::text,''<NULL>'')||'':''||coalesce(r.corrigida::text,''<NULL>'') from public.avaliacao_respostas r join public.avaliacao_tentativas t on t.id=r.tentativa_id where r.id=$1::uuid');
 select case when exists(select 1 from qa_results where id='R55-ZERO-ROW-RPC-SELFTEST' and observed='INCONCLUSIVE') then 1 else 1/(select count(*) from qa_results where id='__R55_ASSERTION_FAILURE__') end;
 DELETE FROM qa_results WHERE id='R55-ZERO-ROW-RPC-SELFTEST';
 \echo 'R55_ZERO_ROW_RPC_SELFTEST: PASS (observed INCONCLUSIVE)';
@@ -1091,7 +1143,7 @@ select pg_temp.qa_probe_actor_dml('R5-STAFF-MATERIAL-INSERT','ALLOW','BLOCKING A
 select pg_temp.qa_probe_actor_dml('R5-TEACHER-MATERIAL-INSERT','DENY','BLOCKING ACADEMIC AUTHORITY','Teacher Exact cannot create a catalog support material without a Class binding','a3000000-0000-0000-0000-000000000005','insert into public.materiais_apoio(id,tenant_id,disciplina_id,titulo,url) values (''c3000000-0000-0000-0000-000000000002'',''a1000000-0000-0000-0000-000000000001'',''a6000000-0000-0000-0000-000000000001'',''QA teacher material'',''https://qa.invalid/teacher-material'')','select count(*)::text from public.materiais_apoio where id=''c3000000-0000-0000-0000-000000000002''');
 
 -- Student answer-key boundaries and the supported submission RPC.
-select pg_temp.qa_probe_actor_count('R4-STUDENT-GABARITO-WHERE','DENY','BLOCKING GABARITO CONFIDENTIALITY','Student cannot use a WHERE-clause answer-key oracle','a3000000-0000-0000-0000-000000000012','select count(*) from public.avaliacao_tentativas where id=''ad000000-0000-0000-0000-000000000001'' and gabarito_snapshot <> ''{}''::jsonb','select count(*)::text from public.avaliacao_tentativas where id=''ad000000-0000-0000-0000-000000000001''');select pg_temp.qa_probe_actor_count_bound('R55-WRONG-TARGET-SELFTEST','INCONCLUSIVE','HARNESS SELF-TEST','A nonexistent answer-key target must never be recorded as DENY','a3000000-0000-0000-0000-000000000012','ad000000-0000-0000-0000-000000009997','select count(*) from public.avaliacao_tentativas where id=''ad000000-0000-0000-0000-000000009997'' and gabarito_snapshot <> ''{}''::jsonb','select id::text, coalesce(situacao::text,''<NULL>'') from public.avaliacao_tentativas where id=''ad000000-0000-0000-0000-000000009997''');
+select pg_temp.qa_probe_actor_count('R4-STUDENT-GABARITO-WHERE','DENY','BLOCKING GABARITO CONFIDENTIALITY','Student cannot use a WHERE-clause answer-key oracle','a3000000-0000-0000-0000-000000000012','select count(*) from public.avaliacao_tentativas where id=''ad000000-0000-0000-0000-000000000001'' and gabarito_snapshot <> ''{}''::jsonb','select count(*)::text from public.avaliacao_tentativas where id=''ad000000-0000-0000-0000-000000000001''');select pg_temp.qa_probe_actor_count_bound('R55-WRONG-TARGET-SELFTEST','INCONCLUSIVE','HARNESS SELF-TEST','A nonexistent answer-key target must never be recorded as DENY','a3000000-0000-0000-0000-000000000012','ad000000-0000-0000-0000-000000009997','ad000000-0000-0000-0000-000000009997','select count(*) from public.avaliacao_tentativas where id=$1::uuid and gabarito_snapshot <> ''{}''::jsonb','select id::text, coalesce(situacao::text,''<NULL>'') from public.avaliacao_tentativas where id=$1::uuid');
 select case when exists(select 1 from qa_results where id='R55-WRONG-TARGET-SELFTEST' and observed='INCONCLUSIVE') then 1 else 1/(select count(*) from qa_results where id='__R55_ASSERTION_FAILURE__') end;
 DELETE FROM qa_results WHERE id='R55-WRONG-TARGET-SELFTEST';
 \echo 'R55_WRONG_TARGET_SELFTEST: PASS (observed INCONCLUSIVE)';
@@ -1343,6 +1395,7 @@ BEGIN
       AND t.tgname='trg_sc004_assessment_evidence_delete'
       AND t.tgenabled='O'
       AND (t.tgtype & 2) = 2
+      AND (t.tgtype & 1) = 1
       AND (t.tgtype & 8) = 8
       AND (t.tgtype & 4) = 0
       AND (t.tgtype & 16) = 0
@@ -1386,34 +1439,34 @@ values ('aa000000-0000-0000-0000-000000000009','a1000000-0000-0000-0000-00000000
        ('aa000000-0000-0000-0000-000000000010','a1000000-0000-0000-0000-000000000001','a6000000-0000-0000-0000-000000000001','R53 Teacher B composition question','objetiva','[{"id":"a"},{"id":"b"}]','a','a4000000-0000-0000-0000-000000000005');
 insert into public.avaliacao_questoes(avaliacao_id,questao_id,ordem,tenant_id)
 values ('ac000000-0000-0000-0000-000000000011','aa000000-0000-0000-0000-000000000009',1,'a1000000-0000-0000-0000-000000000001');
-select pg_temp.qa_probe_actor_dml_bound('R53-H2-INSERT','DENY','BLOCKING COMPOSITION OWNERSHIP','Teacher B cannot add a question to Teacher A pre-evidence assessment','a3000000-0000-0000-0000-000000000005','ac000000-0000-0000-0000-000000000011','insert into public.avaliacao_questoes(avaliacao_id,questao_id,ordem,tenant_id) values (''ac000000-0000-0000-0000-000000000011'',''aa000000-0000-0000-0000-000000000010'',2,''a1000000-0000-0000-0000-000000000001'')','select max(id::text), count(*)::text from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000011''');
-select pg_temp.qa_probe_actor_dml_bound('R53-H2-REORDER','DENY','BLOCKING COMPOSITION OWNERSHIP','Teacher B cannot reorder Teacher A pre-evidence assessment','a3000000-0000-0000-0000-000000000005','ac000000-0000-0000-0000-000000000011|aa000000-0000-0000-0000-000000000009','update public.avaliacao_questoes set ordem=2 where avaliacao_id=''ac000000-0000-0000-0000-000000000011'' and questao_id=''aa000000-0000-0000-0000-000000000009''','select avaliacao_id::text||''|''||questao_id::text, coalesce(ordem::text,''<NULL>'') from public.avaliacao_questoes where avaliacao_id=''ac000000-0000-0000-0000-000000000011'' and questao_id=''aa000000-0000-0000-0000-000000000009''');
-select pg_temp.qa_probe_actor_dml_bound('R53-H2-DELETE','DENY','BLOCKING COMPOSITION OWNERSHIP','Teacher B cannot remove a question from Teacher A pre-evidence assessment','a3000000-0000-0000-0000-000000000005','ac000000-0000-0000-0000-000000000011|aa000000-0000-0000-0000-000000000009','delete from public.avaliacao_questoes where avaliacao_id=''ac000000-0000-0000-0000-000000000011'' and questao_id=''aa000000-0000-0000-0000-000000000009''','select avaliacao_id::text||''|''||questao_id::text, coalesce(ordem::text,''<NULL>'') from public.avaliacao_questoes where avaliacao_id=''ac000000-0000-0000-0000-000000000011'' and questao_id=''aa000000-0000-0000-0000-000000000009''');
+select pg_temp.qa_probe_actor_dml_bound('R53-H2-INSERT','DENY','BLOCKING COMPOSITION OWNERSHIP','Teacher B cannot add a question to Teacher A pre-evidence assessment','a3000000-0000-0000-0000-000000000005','ac000000-0000-0000-0000-000000000011','ac000000-0000-0000-0000-000000000011','insert into public.avaliacao_questoes(avaliacao_id,questao_id,ordem,tenant_id) values ($1::uuid,''aa000000-0000-0000-0000-000000000010'',2,''a1000000-0000-0000-0000-000000000001'')','select max(id::text), count(*)::text from public.avaliacoes where id=$1::uuid');
+select pg_temp.qa_probe_actor_dml_bound('R53-H2-REORDER','DENY','BLOCKING COMPOSITION OWNERSHIP','Teacher B cannot reorder Teacher A pre-evidence assessment','a3000000-0000-0000-0000-000000000005','ac000000-0000-0000-0000-000000000011','ac000000-0000-0000-0000-000000000011','update public.avaliacao_questoes set ordem=2 where avaliacao_id=$1::uuid and questao_id=''aa000000-0000-0000-0000-000000000009''','select avaliacao_id::text, coalesce(ordem::text,''<NULL>'') from public.avaliacao_questoes where avaliacao_id=$1::uuid and questao_id=''aa000000-0000-0000-0000-000000000009''');
+select pg_temp.qa_probe_actor_dml_bound('R53-H2-DELETE','DENY','BLOCKING COMPOSITION OWNERSHIP','Teacher B cannot remove a question from Teacher A pre-evidence assessment','a3000000-0000-0000-0000-000000000005','ac000000-0000-0000-0000-000000000011','ac000000-0000-0000-0000-000000000011','delete from public.avaliacao_questoes where avaliacao_id=$1::uuid and questao_id=''aa000000-0000-0000-0000-000000000009''','select avaliacao_id::text, coalesce(ordem::text,''<NULL>'') from public.avaliacao_questoes where avaliacao_id=$1::uuid and questao_id=''aa000000-0000-0000-0000-000000000009''');
 
 
 -- Explicit positive contract: the assessment creator retains composition control.
 reset role;
 insert into public.questoes(id,tenant_id,disciplina_id,enunciado,tipo,alternativas,resposta_correta,criado_por)
 values ('aa000000-0000-0000-0000-000000000011','a1000000-0000-0000-0000-000000000001','a6000000-0000-0000-0000-000000000001','R53 Teacher A owner question','objetiva','[{"id":"a"}]','a','a4000000-0000-0000-0000-000000000002');
-select pg_temp.qa_probe_actor_dml_bound('R53-H2-OWNER-INSERT','ALLOW','POSITIVE OWNER COMPOSITION','Teacher A can add its own question to its unused assessment','a3000000-0000-0000-0000-000000000002','ac000000-0000-0000-0000-000000000011','insert into public.avaliacao_questoes(avaliacao_id,questao_id,ordem,tenant_id) values (''ac000000-0000-0000-0000-000000000011'',''aa000000-0000-0000-0000-000000000011'',2,''a1000000-0000-0000-0000-000000000001'')','select max(id::text), count(*)::text from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000011''');
-select pg_temp.qa_probe_actor_dml_bound('R53-H2-OWNER-REORDER','ALLOW','POSITIVE OWNER COMPOSITION','Teacher A can reorder its unused assessment','a3000000-0000-0000-0000-000000000002','ac000000-0000-0000-0000-000000000011|aa000000-0000-0000-0000-000000000009','update public.avaliacao_questoes set ordem=2 where avaliacao_id=''ac000000-0000-0000-0000-000000000011'' and questao_id=''aa000000-0000-0000-0000-000000000009''','select avaliacao_id::text||''|''||questao_id::text, coalesce(ordem::text,''<NULL>'') from public.avaliacao_questoes where avaliacao_id=''ac000000-0000-0000-0000-000000000011'' and questao_id=''aa000000-0000-0000-0000-000000000009''');
-select pg_temp.qa_probe_actor_dml_bound('R53-H2-OWNER-DELETE','ALLOW','POSITIVE OWNER COMPOSITION','Teacher A can remove a question from its unused assessment','a3000000-0000-0000-0000-000000000002','ac000000-0000-0000-0000-000000000011|aa000000-0000-0000-0000-000000000009','delete from public.avaliacao_questoes where avaliacao_id=''ac000000-0000-0000-0000-000000000011'' and questao_id=''aa000000-0000-0000-0000-000000000009''','select avaliacao_id::text||''|''||questao_id::text, coalesce(ordem::text,''<NULL>'') from public.avaliacao_questoes where avaliacao_id=''ac000000-0000-0000-0000-000000000011'' and questao_id=''aa000000-0000-0000-0000-000000000009''');
+select pg_temp.qa_probe_actor_dml_bound('R53-H2-OWNER-INSERT','ALLOW','POSITIVE OWNER COMPOSITION','Teacher A can add its own question to its unused assessment','a3000000-0000-0000-0000-000000000002','ac000000-0000-0000-0000-000000000011','ac000000-0000-0000-0000-000000000011','insert into public.avaliacao_questoes(avaliacao_id,questao_id,ordem,tenant_id) values ($1::uuid,''aa000000-0000-0000-0000-000000000011'',2,''a1000000-0000-0000-0000-000000000001'')','select max(id::text), count(*)::text from public.avaliacoes where id=$1::uuid');
+select pg_temp.qa_probe_actor_dml_bound('R53-H2-OWNER-REORDER','ALLOW','POSITIVE OWNER COMPOSITION','Teacher A can reorder its unused assessment','a3000000-0000-0000-0000-000000000002','ac000000-0000-0000-0000-000000000011','ac000000-0000-0000-0000-000000000011','update public.avaliacao_questoes set ordem=2 where avaliacao_id=$1::uuid and questao_id=''aa000000-0000-0000-0000-000000000009''','select avaliacao_id::text, coalesce(ordem::text,''<NULL>'') from public.avaliacao_questoes where avaliacao_id=$1::uuid and questao_id=''aa000000-0000-0000-0000-000000000009''');
+select pg_temp.qa_probe_actor_dml_bound('R53-H2-OWNER-DELETE','ALLOW','POSITIVE OWNER COMPOSITION','Teacher A can remove a question from its unused assessment','a3000000-0000-0000-0000-000000000002','ac000000-0000-0000-0000-000000000011','ac000000-0000-0000-0000-000000000011','delete from public.avaliacao_questoes where avaliacao_id=$1::uuid and questao_id=''aa000000-0000-0000-0000-000000000009''','select avaliacao_id::text, coalesce(ordem::text,''<NULL>'') from public.avaliacao_questoes where avaliacao_id=$1::uuid and questao_id=''aa000000-0000-0000-0000-000000000009''');
 
 -- H3: unused/pre-evidence provenance and content are immutable for Teacher B.
-select pg_temp.qa_probe_actor_dml_bound('R53-H3-A-CREATOR','DENY','BLOCKING OWNERSHIP PROVENANCE','Teacher B cannot take over assessment creator','a3000000-0000-0000-0000-000000000005','ac000000-0000-0000-0000-000000000011','update public.avaliacoes set criado_por=''a4000000-0000-0000-0000-000000000005'' where id=''ac000000-0000-0000-0000-000000000011''','select id::text, coalesce(criado_por::text,''<NULL>'')||''|''||coalesce(titulo,''<NULL>'') from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000011''');
-select pg_temp.qa_probe_actor_dml_bound('R53-H3-A-TITLE','DENY','BLOCKING OWNERSHIP PROVENANCE','Teacher B cannot combine assessment takeover with title mutation','a3000000-0000-0000-0000-000000000005','ac000000-0000-0000-0000-000000000011','update public.avaliacoes set criado_por=''a4000000-0000-0000-0000-000000000005'',titulo=''R53 forged title'' where id=''ac000000-0000-0000-0000-000000000011''','select id::text, coalesce(criado_por::text,''<NULL>'')||''|''||coalesce(titulo,''<NULL>'') from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000011''');
-select pg_temp.qa_probe_actor_dml_bound('R53-H3-A-KEY','DENY','BLOCKING OWNERSHIP PROVENANCE','Teacher B cannot combine assessment takeover with grading configuration mutation','a3000000-0000-0000-0000-000000000005','ac000000-0000-0000-0000-000000000011','update public.avaliacoes set criado_por=''a4000000-0000-0000-0000-000000000005'',nota_minima=55 where id=''ac000000-0000-0000-0000-000000000011''','select id::text, coalesce(criado_por::text,''<NULL>'')||''|''||coalesce(titulo,''<NULL>'') from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000011''');
-select pg_temp.qa_probe_actor_dml_bound('R53-H3-A-LIFECYCLE','DENY','BLOCKING OWNERSHIP PROVENANCE','Teacher B cannot combine assessment takeover with lifecycle mutation','a3000000-0000-0000-0000-000000000005','ac000000-0000-0000-0000-000000000011','update public.avaliacoes set criado_por=''a4000000-0000-0000-0000-000000000005'',situacao=''publicada'' where id=''ac000000-0000-0000-0000-000000000011''','select id::text, coalesce(criado_por::text,''<NULL>'')||''|''||coalesce(titulo,''<NULL>'') from public.avaliacoes where id=''ac000000-0000-0000-0000-000000000011''');
-select pg_temp.qa_probe_actor_dml_bound('R53-H3-Q-CREATOR','DENY','BLOCKING OWNERSHIP PROVENANCE','Teacher B cannot take over pre-evidence question creator','a3000000-0000-0000-0000-000000000005','aa000000-0000-0000-0000-000000000009','update public.questoes set criado_por=''a4000000-0000-0000-0000-000000000005'' where id=''aa000000-0000-0000-0000-000000000009''','select id::text, coalesce(criado_por::text,''<NULL>'')||''|''||coalesce(enunciado,''<NULL>'') from public.questoes where id=''aa000000-0000-0000-0000-000000000009''');
-select pg_temp.qa_probe_actor_dml_bound('R53-H3-Q-TEXT','DENY','BLOCKING OWNERSHIP PROVENANCE','Teacher B cannot combine question takeover with text mutation','a3000000-0000-0000-0000-000000000005','aa000000-0000-0000-0000-000000000009','update public.questoes set criado_por=''a4000000-0000-0000-0000-000000000005'',enunciado=''R53 forged text'' where id=''aa000000-0000-0000-0000-000000000009''','select id::text, coalesce(criado_por::text,''<NULL>'')||''|''||coalesce(enunciado,''<NULL>'') from public.questoes where id=''aa000000-0000-0000-0000-000000000009''');
-select pg_temp.qa_probe_actor_dml_bound('R53-H3-Q-KEY','DENY','BLOCKING OWNERSHIP PROVENANCE','Teacher B cannot combine question takeover with answer-key mutation','a3000000-0000-0000-0000-000000000005','aa000000-0000-0000-0000-000000000009','update public.questoes set criado_por=''a4000000-0000-0000-0000-000000000005'',resposta_correta=''b'' where id=''aa000000-0000-0000-0000-000000000009''','select id::text, coalesce(criado_por::text,''<NULL>'')||''|''||coalesce(enunciado,''<NULL>'') from public.questoes where id=''aa000000-0000-0000-0000-000000000009''');
-select pg_temp.qa_probe_actor_dml_bound('R53-H3-Q-LIFECYCLE','DENY','BLOCKING OWNERSHIP PROVENANCE','Teacher B cannot combine question takeover with active lifecycle mutation','a3000000-0000-0000-0000-000000000005','aa000000-0000-0000-0000-000000000009','update public.questoes set criado_por=''a4000000-0000-0000-0000-000000000005'',ativa=false where id=''aa000000-0000-0000-0000-000000000009''','select id::text, coalesce(criado_por::text,''<NULL>'')||''|''||coalesce(enunciado,''<NULL>'') from public.questoes where id=''aa000000-0000-0000-0000-000000000009''');
+select pg_temp.qa_probe_actor_dml_bound('R53-H3-A-CREATOR','DENY','BLOCKING OWNERSHIP PROVENANCE','Teacher B cannot take over assessment creator','a3000000-0000-0000-0000-000000000005','ac000000-0000-0000-0000-000000000011','ac000000-0000-0000-0000-000000000011','update public.avaliacoes set criado_por=''a4000000-0000-0000-0000-000000000005'' where id=$1::uuid','select id::text, coalesce(criado_por::text,''<NULL>'')||''|''||coalesce(titulo,''<NULL>'') from public.avaliacoes where id=$1::uuid');
+select pg_temp.qa_probe_actor_dml_bound('R53-H3-A-TITLE','DENY','BLOCKING OWNERSHIP PROVENANCE','Teacher B cannot combine assessment takeover with title mutation','a3000000-0000-0000-0000-000000000005','ac000000-0000-0000-0000-000000000011','ac000000-0000-0000-0000-000000000011','update public.avaliacoes set criado_por=''a4000000-0000-0000-0000-000000000005'',titulo=''R53 forged title'' where id=$1::uuid','select id::text, coalesce(criado_por::text,''<NULL>'')||''|''||coalesce(titulo,''<NULL>'') from public.avaliacoes where id=$1::uuid');
+select pg_temp.qa_probe_actor_dml_bound('R53-H3-A-KEY','DENY','BLOCKING OWNERSHIP PROVENANCE','Teacher B cannot combine assessment takeover with grading configuration mutation','a3000000-0000-0000-0000-000000000005','ac000000-0000-0000-0000-000000000011','ac000000-0000-0000-0000-000000000011','update public.avaliacoes set criado_por=''a4000000-0000-0000-0000-000000000005'',nota_minima=55 where id=$1::uuid','select id::text, coalesce(criado_por::text,''<NULL>'')||''|''||coalesce(titulo,''<NULL>'') from public.avaliacoes where id=$1::uuid');
+select pg_temp.qa_probe_actor_dml_bound('R53-H3-A-LIFECYCLE','DENY','BLOCKING OWNERSHIP PROVENANCE','Teacher B cannot combine assessment takeover with lifecycle mutation','a3000000-0000-0000-0000-000000000005','ac000000-0000-0000-0000-000000000011','ac000000-0000-0000-0000-000000000011','update public.avaliacoes set criado_por=''a4000000-0000-0000-0000-000000000005'',situacao=''publicada'' where id=$1::uuid','select id::text, coalesce(criado_por::text,''<NULL>'')||''|''||coalesce(titulo,''<NULL>'') from public.avaliacoes where id=$1::uuid');
+select pg_temp.qa_probe_actor_dml_bound('R53-H3-Q-CREATOR','DENY','BLOCKING OWNERSHIP PROVENANCE','Teacher B cannot take over pre-evidence question creator','a3000000-0000-0000-0000-000000000005','aa000000-0000-0000-0000-000000000009','aa000000-0000-0000-0000-000000000009','update public.questoes set criado_por=''a4000000-0000-0000-0000-000000000005'' where id=$1::uuid','select id::text, coalesce(criado_por::text,''<NULL>'')||''|''||coalesce(enunciado,''<NULL>'') from public.questoes where id=$1::uuid');
+select pg_temp.qa_probe_actor_dml_bound('R53-H3-Q-TEXT','DENY','BLOCKING OWNERSHIP PROVENANCE','Teacher B cannot combine question takeover with text mutation','a3000000-0000-0000-0000-000000000005','aa000000-0000-0000-0000-000000000009','aa000000-0000-0000-0000-000000000009','update public.questoes set criado_por=''a4000000-0000-0000-0000-000000000005'',enunciado=''R53 forged text'' where id=$1::uuid','select id::text, coalesce(criado_por::text,''<NULL>'')||''|''||coalesce(enunciado,''<NULL>'') from public.questoes where id=$1::uuid');
+select pg_temp.qa_probe_actor_dml_bound('R53-H3-Q-KEY','DENY','BLOCKING OWNERSHIP PROVENANCE','Teacher B cannot combine question takeover with answer-key mutation','a3000000-0000-0000-0000-000000000005','aa000000-0000-0000-0000-000000000009','aa000000-0000-0000-0000-000000000009','update public.questoes set criado_por=''a4000000-0000-0000-0000-000000000005'',resposta_correta=''b'' where id=$1::uuid','select id::text, coalesce(criado_por::text,''<NULL>'')||''|''||coalesce(enunciado,''<NULL>'') from public.questoes where id=$1::uuid');
+select pg_temp.qa_probe_actor_dml_bound('R53-H3-Q-LIFECYCLE','DENY','BLOCKING OWNERSHIP PROVENANCE','Teacher B cannot combine question takeover with active lifecycle mutation','a3000000-0000-0000-0000-000000000005','aa000000-0000-0000-0000-000000000009','aa000000-0000-0000-0000-000000000009','update public.questoes set criado_por=''a4000000-0000-0000-0000-000000000005'',ativa=false where id=$1::uuid','select id::text, coalesce(criado_por::text,''<NULL>'')||''|''||coalesce(enunciado,''<NULL>'') from public.questoes where id=$1::uuid');
 
 -- H4: Staff A cannot address any Tenant B assignment operation.
 select pg_temp.qa_probe_actor_count('R53-H4-SELECT','DENY','BLOCKING STAFF TENANT BOUNDARY','Staff A cannot select Tenant B assignment','a3000000-0000-0000-0000-000000000001','select count(*) from public.atribuicoes_academicas_professor where id=''bb100000-0000-0000-0000-000000000001''','select count(*)::text from public.atribuicoes_academicas_professor where id=''bb100000-0000-0000-0000-000000000001''');
-select pg_temp.qa_probe_actor_dml_bound('R53-H4-INSERT','DENY','BLOCKING STAFF TENANT BOUNDARY','Staff A cannot insert otherwise-valid Tenant B assignment','a3000000-0000-0000-0000-000000000001','b1000000-0000-0000-0000-000000000001','insert into public.atribuicoes_academicas_professor(id,tenant_id,professor_id,turma_id,disciplina_id) values (''c8000000-0000-0000-0000-000000000002'',''b1000000-0000-0000-0000-000000000001'',''b4000000-0000-0000-0000-000000000001'',''b7000000-0000-0000-0000-000000000001'',''b6000000-0000-0000-0000-000000000002'')','select id::text, coalesce(nome,''<NULL>'') from public.tenants where id=''b1000000-0000-0000-0000-000000000001''');
-select pg_temp.qa_probe_actor_dml_bound('R53-H4-UPDATE','DENY','BLOCKING STAFF TENANT BOUNDARY','Staff A cannot update Tenant B assignment','a3000000-0000-0000-0000-000000000001','bb100000-0000-0000-0000-000000000001','update public.atribuicoes_academicas_professor set ativo=false where id=''bb100000-0000-0000-0000-000000000001''','select id::text, coalesce(ativo::text,''<NULL>'') from public.atribuicoes_academicas_professor where id=''bb100000-0000-0000-0000-000000000001''');
-select pg_temp.qa_probe_actor_dml_bound('R53-H4-DELETE','DENY','BLOCKING STAFF TENANT BOUNDARY','Staff A cannot delete Tenant B assignment','a3000000-0000-0000-0000-000000000001','bb100000-0000-0000-0000-000000000001','delete from public.atribuicoes_academicas_professor where id=''bb100000-0000-0000-0000-000000000001''','select id::text, coalesce(ativo::text,''<NULL>'') from public.atribuicoes_academicas_professor where id=''bb100000-0000-0000-0000-000000000001''');
+select pg_temp.qa_probe_actor_dml_bound('R53-H4-INSERT','DENY','BLOCKING STAFF TENANT BOUNDARY','Staff A cannot insert otherwise-valid Tenant B assignment','a3000000-0000-0000-0000-000000000001','b1000000-0000-0000-0000-000000000001','b1000000-0000-0000-0000-000000000001','insert into public.atribuicoes_academicas_professor(id,tenant_id,professor_id,turma_id,disciplina_id) values (''c8000000-0000-0000-0000-000000000002'',$1::uuid,''b4000000-0000-0000-0000-000000000001'',''b7000000-0000-0000-0000-000000000001'',''b6000000-0000-0000-0000-000000000002'')','select id::text, coalesce(nome,''<NULL>'') from public.tenants where id=$1::uuid');
+select pg_temp.qa_probe_actor_dml_bound('R53-H4-UPDATE','DENY','BLOCKING STAFF TENANT BOUNDARY','Staff A cannot update Tenant B assignment','a3000000-0000-0000-0000-000000000001','bb100000-0000-0000-0000-000000000001','bb100000-0000-0000-0000-000000000001','update public.atribuicoes_academicas_professor set ativo=false where id=$1::uuid','select id::text, coalesce(ativo::text,''<NULL>'') from public.atribuicoes_academicas_professor where id=$1::uuid');
+select pg_temp.qa_probe_actor_dml_bound('R53-H4-DELETE','DENY','BLOCKING STAFF TENANT BOUNDARY','Staff A cannot delete Tenant B assignment','a3000000-0000-0000-0000-000000000001','bb100000-0000-0000-0000-000000000001','bb100000-0000-0000-0000-000000000001','delete from public.atribuicoes_academicas_professor where id=$1::uuid','select id::text, coalesce(ativo::text,''<NULL>'') from public.atribuicoes_academicas_professor where id=$1::uuid');
 
 
 -- M1/R5.3: real concurrent submission regression. The helper creates a fresh
@@ -1500,10 +1553,38 @@ DROP TRIGGER qa_r55_submit_pause ON public.avaliacao_respostas;
 -- M4 self-test: an absent/mismatched target is never a successful DENY proof.
 -- The row is removed after checking the observed classification so this
 -- harness-health assertion does not inflate the security PASS count.
-select pg_temp.qa_probe_actor_dml_bound('R54-M4-ZERO-ROW-SELFTEST','INCONCLUSIVE','HARNESS SELF-TEST','Nonexistent target must remain inconclusive, never a DENY pass','a3000000-0000-0000-0000-000000000005','aa000000-0000-0000-0000-000000009999','delete from public.questoes where id=''aa000000-0000-0000-0000-000000009999''','select id::text, coalesce(enunciado,''<NULL>'') from public.questoes where id=''aa000000-0000-0000-0000-000000009999''');
-select pg_temp.qa_probe_actor_dml_bound('R56-BOUND-DIVERGENT-TARGET','INCONCLUSIVE','HARNESS SELF-TEST','DML target A with independent state target B must remain inconclusive','a3000000-0000-0000-0000-000000000005','aa000000-0000-0000-0000-000000009998','delete from public.questoes where id=''aa000000-0000-0000-0000-000000009998''','select id::text, coalesce(enunciado,''<NULL>'') from public.questoes where id=''aa000000-0000-0000-0000-000000000009''');
-select pg_temp.qa_probe_actor_dml_bound('R56-BOUND-MALFORMED-ID','INCONCLUSIVE','HARNESS SELF-TEST','Malformed target identifiers and setup errors must remain inconclusive','a3000000-0000-0000-0000-000000000005','not-a-uuid','delete from public.questoes where id=''not-a-uuid''','select id::text, coalesce(enunciado,''<NULL>'') from public.questoes where id=''aa000000-0000-0000-0000-000000000009''');
-select pg_temp.qa_probe_actor_dml_bound('R56-BOUND-NULL-STATE','INCONCLUSIVE','HARNESS SELF-TEST','A NULL state for an existing target is not existence proof','a3000000-0000-0000-0000-000000000005','aa000000-0000-0000-0000-000000000009','delete from public.questoes where id=''aa000000-0000-0000-0000-000000000009''','select id::text, NULL::text from public.questoes where id=''aa000000-0000-0000-0000-000000000009''');
+
+-- R5.7 F2 regressions: operation and state identities are separate inputs,
+-- but both SQL fragments bind through $1. Any mismatch is rejected before the
+-- operation, covering both directions and all three bound helper contracts.
+select pg_temp.qa_probe_actor_dml_bound('R57-DML-OP-A-STATE-B','INCONCLUSIVE','HARNESS SELF-TEST','DML nonexistent A with state B must be inconclusive','a3000000-0000-0000-0000-000000000005','aa000000-0000-0000-0000-000000009998','aa000000-0000-0000-0000-000000000009','delete from public.questoes where id=$1::uuid','select id::text, coalesce(enunciado,''<NULL>'') from public.questoes where id=$1::uuid');
+select pg_temp.qa_probe_actor_dml_bound('R57-DML-OP-B-STATE-A','INCONCLUSIVE','HARNESS SELF-TEST','DML existing B with nonexistent A must be inconclusive','a3000000-0000-0000-0000-000000000005','aa000000-0000-0000-0000-000000000009','aa000000-0000-0000-0000-000000009997','delete from public.questoes where id=$1::uuid','select id::text, coalesce(enunciado,''<NULL>'') from public.questoes where id=$1::uuid');
+select pg_temp.qa_probe_actor_dml_bound('R57-DML-OP-A-DECLARED-B','INCONCLUSIVE','HARNESS SELF-TEST','DML existing A with declared B must be inconclusive','a3000000-0000-0000-0000-000000000005','aa000000-0000-0000-0000-000000000009','aa000000-0000-0000-0000-000000000010','update public.questoes set enunciado=enunciado where id=$1::uuid','select id::text, coalesce(enunciado,''<NULL>'') from public.questoes where id=$1::uuid');
+select pg_temp.qa_probe_actor_dml_bound('R57-DML-MALFORMED','INCONCLUSIVE','HARNESS SELF-TEST','Malformed bound DML target must be inconclusive','a3000000-0000-0000-0000-000000000005','not-a-uuid','not-a-uuid','delete from public.questoes where id=$1::uuid','select id::text, coalesce(enunciado,''<NULL>'') from public.questoes where id=$1::uuid');
+select pg_temp.qa_probe_actor_dml_bound('R57-DML-NULL','INCONCLUSIVE','HARNESS SELF-TEST','NULL DML state must be inconclusive','a3000000-0000-0000-0000-000000000002','aa000000-0000-0000-0000-000000000009','aa000000-0000-0000-0000-000000000009','update public.questoes set enunciado=enunciado where id=$1::uuid','select id::text, NULL::text from public.questoes where id=$1::uuid');
+select pg_temp.qa_probe_actor_dml_bound('R57-DML-UNAUTHORIZED','DENY','HARNESS SELF-TEST','Unauthorized existing DML target remains a denial','a3000000-0000-0000-0000-000000000001','bb000000-0000-0000-0000-000000000003','bb000000-0000-0000-0000-000000000003','update public.questoes set enunciado=enunciado where id=$1::uuid','select id::text, coalesce(enunciado,''<NULL>'') from public.questoes where id=$1::uuid');
+select pg_temp.qa_probe_actor_dml_bound('R57-DML-AUTHORIZED','ALLOW','HARNESS SELF-TEST','Authorized existing DML target remains allowed','a3000000-0000-0000-0000-000000000002','aa000000-0000-0000-0000-000000000009','aa000000-0000-0000-0000-000000000009','update public.questoes set enunciado=enunciado where id=$1::uuid','select id::text, coalesce(enunciado,''<NULL>'') from public.questoes where id=$1::uuid');
+
+select pg_temp.qa_probe_actor_count_bound('R57-COUNT-OP-A-STATE-B','INCONCLUSIVE','HARNESS SELF-TEST','Count nonexistent A with state B must be inconclusive','a3000000-0000-0000-0000-000000000001','aa100000-0000-0000-0000-000000009998','bb100000-0000-0000-0000-000000000001','select count(*) from public.atribuicoes_academicas_professor where id=$1::uuid','select id::text, coalesce(ativo::text,''<NULL>'') from public.atribuicoes_academicas_professor where id=$1::uuid');
+select pg_temp.qa_probe_actor_count_bound('R57-COUNT-OP-B-STATE-A','INCONCLUSIVE','HARNESS SELF-TEST','Count existing B with state A must be inconclusive','a3000000-0000-0000-0000-000000000001','bb100000-0000-0000-0000-000000000001','aa100000-0000-0000-0000-000000009997','select count(*) from public.atribuicoes_academicas_professor where id=$1::uuid','select id::text, coalesce(ativo::text,''<NULL>'') from public.atribuicoes_academicas_professor where id=$1::uuid');
+select pg_temp.qa_probe_actor_count_bound('R57-COUNT-OP-A-DECLARED-B','INCONCLUSIVE','HARNESS SELF-TEST','Count existing A with declared B must be inconclusive','a3000000-0000-0000-0000-000000000001','aa100000-0000-0000-0000-000000000001','bb100000-0000-0000-0000-000000000001','select count(*) from public.atribuicoes_academicas_professor where id=$1::uuid','select id::text, coalesce(ativo::text,''<NULL>'') from public.atribuicoes_academicas_professor where id=$1::uuid');
+select pg_temp.qa_probe_actor_count_bound('R57-COUNT-MALFORMED','INCONCLUSIVE','HARNESS SELF-TEST','Malformed bound count target must be inconclusive','a3000000-0000-0000-0000-000000000001','not-a-uuid','not-a-uuid','select count(*) from public.atribuicoes_academicas_professor where id=$1::uuid','select id::text, coalesce(ativo::text,''<NULL>'') from public.atribuicoes_academicas_professor where id=$1::uuid');
+select pg_temp.qa_probe_actor_count_bound('R57-COUNT-NULL','INCONCLUSIVE','HARNESS SELF-TEST','NULL count state must be inconclusive','a3000000-0000-0000-000000000002','aa100000-0000-0000-0000-000000000001','aa100000-0000-0000-0000-000000000001','select count(*) from public.atribuicoes_academicas_professor where id=$1::uuid','select id::text, NULL::text from public.atribuicoes_academicas_professor where id=$1::uuid');
+select pg_temp.qa_probe_actor_count_bound('R57-COUNT-UNAUTHORIZED','DENY','HARNESS SELF-TEST','Unauthorized existing count target remains a denial','a3000000-0000-0000-0000-000000000001','bb100000-0000-0000-0000-000000000001','bb100000-0000-0000-0000-000000000001','select count(*) from public.atribuicoes_academicas_professor where id=$1::uuid','select id::text, coalesce(ativo::text,''<NULL>'') from public.atribuicoes_academicas_professor where id=$1::uuid');
+select pg_temp.qa_probe_actor_count_bound('R57-COUNT-AUTHORIZED','ALLOW','HARNESS SELF-TEST','Authorized existing count target remains allowed','a3000000-0000-0000-0000-000000000002','aa100000-0000-0000-0000-000000000001','aa100000-0000-0000-0000-000000000001','select count(*) from public.atribuicoes_academicas_professor where id=$1::uuid','select id::text, coalesce(ativo::text,''<NULL>'') from public.atribuicoes_academicas_professor where id=$1::uuid');
+
+select pg_temp.qa_probe_actor_rpc_bound('R57-RPC-OP-A-STATE-B','INCONCLUSIVE','HARNESS SELF-TEST','R57 bound contract self-test','a3000000-0000-0000-0000-000000000001','','ae000000-0000-0000-0000-000000009998','ae000000-0000-0000-0000-000000000020','select public.corrigir_resposta_avaliacao($1::uuid,1,''R57 divergent'')','select id::text, coalesce(corrigida::text,''<NULL>'') from public.avaliacao_respostas where id=$1::uuid');
+select pg_temp.qa_probe_actor_rpc_bound('R57-RPC-OP-B-STATE-A','INCONCLUSIVE','HARNESS SELF-TEST','R57 bound contract self-test','b3000000-0000-0000-0000-000000000001','','ae000000-0000-0000-0000-000000000020','ae000000-0000-0000-0000-000000009997','select public.corrigir_resposta_avaliacao($1::uuid,1,''R57 divergent'')','select id::text, coalesce(corrigida::text,''<NULL>'') from public.avaliacao_respostas where id=$1::uuid');
+select pg_temp.qa_probe_actor_rpc_bound('R57-RPC-OP-A-DECLARED-B','INCONCLUSIVE','HARNESS SELF-TEST','R57 bound contract self-test','a3000000-0000-0000-0000-000000000005','','ae000000-0000-0000-0000-000000000020','ae000000-0000-0000-0000-000000000004','select public.corrigir_resposta_avaliacao($1::uuid,1,''R57 declared mismatch'')','select id::text, coalesce(corrigida::text,''<NULL>'') from public.avaliacao_respostas where id=$1::uuid');
+select pg_temp.qa_probe_actor_rpc_bound('R57-RPC-MALFORMED','INCONCLUSIVE','HARNESS SELF-TEST','R57 bound contract self-test','a3000000-0000-0000-0000-000000000005','','not-a-uuid','not-a-uuid','select public.corrigir_resposta_avaliacao($1::uuid,1,''R57 malformed'')','select id::text, coalesce(corrigida::text,''<NULL>'') from public.avaliacao_respostas where id=$1::uuid');
+select pg_temp.qa_probe_actor_rpc_bound('R57-RPC-NULL','INCONCLUSIVE','HARNESS SELF-TEST','R57 bound contract self-test','a3000000-0000-0000-0000-000000000005','','ae000000-0000-0000-0000-000000000020','ae000000-0000-0000-0000-000000000020','select public.corrigir_resposta_avaliacao($1::uuid,1,''R57 null state'')','select id::text, NULL::text from public.avaliacao_respostas where id=$1::uuid');
+select pg_temp.qa_probe_actor_rpc_bound('R57-RPC-UNAUTHORIZED','DENY','HARNESS SELF-TEST','Unauthorized existing RPC target remains a denial','b3000000-0000-0000-0000-000000000001','','ae000000-0000-0000-0000-000000000020','ae000000-0000-0000-0000-000000000020','select public.corrigir_resposta_avaliacao($1::uuid,1,''R57 unauthorized'')','select id::text, coalesce(corrigida::text,''<NULL>'') from public.avaliacao_respostas where id=$1::uuid');
+select pg_temp.qa_probe_actor_rpc_bound('R57-RPC-AUTHORIZED','ALLOW','HARNESS SELF-TEST','Authorized existing RPC target remains allowed','a3000000-0000-0000-0000-000000000005','','ae000000-0000-0000-0000-000000000020','ae000000-0000-0000-0000-000000000020','select public.corrigir_resposta_avaliacao($1::uuid,1,''R57 authorized'')','select id::text, coalesce(corrigida::text,''<NULL>'') from public.avaliacao_respostas where id=$1::uuid');
+
+select pg_temp.qa_probe_actor_dml_bound('R54-M4-ZERO-ROW-SELFTEST','INCONCLUSIVE','HARNESS SELF-TEST','Nonexistent target must remain inconclusive, never a DENY pass','a3000000-0000-0000-0000-000000000005','aa000000-0000-0000-0000-000000009999','aa000000-0000-0000-0000-000000009999','delete from public.questoes where id=$1::uuid','select id::text, coalesce(enunciado,''<NULL>'') from public.questoes where id=$1::uuid');
+select pg_temp.qa_probe_actor_dml_bound('R56-BOUND-DIVERGENT-TARGET','INCONCLUSIVE','HARNESS SELF-TEST','DML target A with independent state target B must remain inconclusive','a3000000-0000-0000-0000-000000000005','aa000000-0000-0000-0000-000000009998','aa000000-0000-0000-0000-000000009998','delete from public.questoes where id=$1::uuid','select id::text, coalesce(enunciado,''<NULL>'') from public.questoes where id=''aa000000-0000-0000-0000-000000000009''');
+select pg_temp.qa_probe_actor_dml_bound('R56-BOUND-MALFORMED-ID','INCONCLUSIVE','HARNESS SELF-TEST','Malformed target identifiers and setup errors must remain inconclusive','a3000000-0000-0000-0000-000000000005','not-a-uuid','not-a-uuid','delete from public.questoes where id=$1::uuid','select id::text, coalesce(enunciado,''<NULL>'') from public.questoes where id=''aa000000-0000-0000-0000-000000000009''');
+select pg_temp.qa_probe_actor_dml_bound('R56-BOUND-NULL-STATE','INCONCLUSIVE','HARNESS SELF-TEST','A NULL state for an existing target is not existence proof','a3000000-0000-0000-0000-000000000005','aa000000-0000-0000-0000-000000000009','aa000000-0000-0000-0000-000000000009','delete from public.questoes where id=$1::uuid','select id::text, NULL::text from public.questoes where id=$1::uuid');
 DO $$
 DECLARE v_observed text;
 BEGIN
@@ -1512,18 +1593,27 @@ BEGIN
     RAISE EXCEPTION 'R54 zero-row self-test expected INCONCLUSIVE, got %', coalesce(v_observed,'<MISSING>');
   END IF;
   DELETE FROM qa_results WHERE id='R54-M4-ZERO-ROW-SELFTEST';
-  FOREACH v_observed IN ARRAY ARRAY['R56-BOUND-DIVERGENT-TARGET','R56-BOUND-MALFORMED-ID','R56-BOUND-NULL-STATE'] LOOP
+  FOREACH v_observed IN ARRAY ARRAY['R56-BOUND-DIVERGENT-TARGET','R56-BOUND-MALFORMED-ID','R56-BOUND-NULL-STATE','R57-DML-OP-A-STATE-B','R57-DML-OP-B-STATE-A','R57-DML-OP-A-DECLARED-B','R57-DML-MALFORMED','R57-DML-NULL','R57-COUNT-OP-A-STATE-B','R57-COUNT-OP-B-STATE-A','R57-COUNT-OP-A-DECLARED-B','R57-COUNT-MALFORMED','R57-COUNT-NULL','R57-RPC-OP-A-STATE-B','R57-RPC-OP-B-STATE-A','R57-RPC-OP-A-DECLARED-B','R57-RPC-MALFORMED','R57-RPC-NULL'] LOOP
     IF (SELECT observed FROM qa_results WHERE id=v_observed) IS DISTINCT FROM 'INCONCLUSIVE' THEN
-      RAISE EXCEPTION 'R56 bound self-test % expected INCONCLUSIVE, got %', v_observed,
+      RAISE EXCEPTION 'R57 bound inconclusive self-test % expected INCONCLUSIVE, got %', v_observed,
         coalesce((SELECT observed FROM qa_results WHERE id=v_observed),'<MISSING>');
     END IF;
     DELETE FROM qa_results WHERE id=v_observed;
+  END LOOP;
+  FOREACH v_observed IN ARRAY ARRAY['R57-DML-UNAUTHORIZED=DENY','R57-DML-AUTHORIZED=ALLOW','R57-COUNT-UNAUTHORIZED=DENY','R57-COUNT-AUTHORIZED=ALLOW','R57-RPC-UNAUTHORIZED=DENY','R57-RPC-AUTHORIZED=ALLOW'] LOOP
+    IF (SELECT observed FROM qa_results WHERE id=split_part(v_observed,'=',1)) IS DISTINCT FROM split_part(v_observed,'=',2) THEN
+      RAISE EXCEPTION 'R57 bound positive/negative self-test % expected %, got %',
+        split_part(v_observed,'=',1), split_part(v_observed,'=',2),
+        coalesce((SELECT observed FROM qa_results WHERE id=split_part(v_observed,'=',1)),'<MISSING>');
+    END IF;
+    DELETE FROM qa_results WHERE id=split_part(v_observed,'=',1);
   END LOOP;
 END
 $$;
 
 \echo 'R54_M4_ZERO_ROW_SELFTEST: PASS (observed INCONCLUSIVE)'
 \echo 'R56_BOUND_TARGET_SELFTESTS: PASS (divergent/malformed/NULL all observed INCONCLUSIVE)'
+\echo 'R57_BOUND_TARGET_SELFTESTS: PASS (DML/count/RPC divergent/malformed/NULL fail closed; unauthorized DENY; authorized ALLOW)'
 
 -- Restore role and emit all results. Fixture remains disposable and is removed by dropping the QA database.
 reset role;
