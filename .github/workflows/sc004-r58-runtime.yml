@@ -1,0 +1,236 @@
+name: SC004 R5.8 isolated runtime gate
+run-name: SC004 R5.8 d35fdaa runtime attempt ${{ github.run_attempt }}
+
+# The first approved push publishes the candidate AND starts this job.
+# No workflow_dispatch dependency on the default branch.
+on:
+  push:
+    branches: [ci/sc004-r58-runtime-d35fdaa-20261015]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sc004-r58-runtime-d35fdaa
+  cancel-in-progress: false
+
+jobs:
+  sc004-runtime:
+    if: github.repository == 'ojeankarlo-oss/Kora-Learn' && github.event.deleted == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    env:
+      CANDIDATE_SHA: d35fdaac8f270b337764571756d3c0b7fe0c6287
+      CANDIDATE_PARENT: aaf40f6cfbd54522af32b5adeb9a667b1d7779ba
+      BUNDLE_SHA256: F7AE01150DBF08E9AF1BC3240B94E9A7E7B257FFCC231765CDAA9A279B832D2F
+      SC004_QA_IMAGE: supabase/postgres:15.14.1.167
+
+    steps:
+      - name: Checkout orchestration commit only
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+          path: control
+
+      - name: Verify bundle and import immutable candidate
+        id: prepare
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/sc004-evidence"
+          exec > >(tee "$RUNNER_TEMP/sc004-evidence/preflight.log") 2>&1
+          test "$GITHUB_REF" = refs/heads/ci/sc004-r58-runtime-d35fdaa-20261015
+          test "$(git -C control rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C control rev-parse HEAD^)" = "$CANDIDATE_SHA"
+          printf '%s\n' .github/workflows/sc004-r58-runtime.yml .qa/sc004-r58.bundle > "$RUNNER_TEMP/sc004-expected-scope"
+          git -C control diff --name-only HEAD^ HEAD > "$RUNNER_TEMP/sc004-actual-scope"
+          diff -u "$RUNNER_TEMP/sc004-expected-scope" "$RUNNER_TEMP/sc004-actual-scope"
+          printf '%s  control/.qa/sc004-r58.bundle\n' "$BUNDLE_SHA256" | sha256sum -c -
+          git clone --no-local --branch fix/sc004-r58-sql-delimiter control/.qa/sc004-r58.bundle candidate
+          git -C candidate bundle verify "$GITHUB_WORKSPACE/control/.qa/sc004-r58.bundle"
+          test "$(git -C candidate rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git -C candidate rev-parse HEAD^)" = "$CANDIDATE_PARENT"
+          test "$(git -C candidate branch --show-current)" = fix/sc004-r58-sql-delimiter
+          test -z "$(git -C candidate status --porcelain)"
+          for tool in node python3 docker openssl sha256sum timeout; do command -v "$tool"; done
+          node --version
+          python3 --version
+          docker version
+          printf 'CANDIDATE_SHA=%s\nCANDIDATE_PARENT=%s\nCONTROL_SHA=%s\nRUN_ID=%s\nRUN_ATTEMPT=%s\nBUNDLE_SHA256=%s\n' \
+            "$CANDIDATE_SHA" "$CANDIDATE_PARENT" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$BUNDLE_SHA256" \
+            > "$RUNNER_TEMP/sc004-evidence/identity.txt"
+          git -C candidate ls-tree -r "$CANDIDATE_SHA" supabase/migrations > "$RUNNER_TEMP/sc004-evidence/migration-tree.txt"
+          cd candidate
+          node tests/school/verify-sc004-r58.mjs 2>&1 | tee "$RUNNER_TEMP/sc004-evidence/static.log"
+          bash -n tests/school/run-sc004-r58.sh
+
+      - name: Prepare pinned disposable PostgreSQL image
+        run: |
+          set -euo pipefail
+          docker pull "$SC004_QA_IMAGE" 2>&1 | tee "$RUNNER_TEMP/sc004-evidence/image-pull.log"
+          docker image inspect "$SC004_QA_IMAGE" > "$RUNNER_TEMP/sc004-evidence/image-resolved.json"
+
+      - name: Execute canonical replay and A/B/CD in one psql session
+        id: runtime
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          export SC004_QA_EVIDENCE_DIR="$RUNNER_TEMP/sc004-evidence/runtime"
+          set +e
+          timeout --signal=TERM --kill-after=20s 15m bash tests/school/run-sc004-r58.sh 2>&1 \
+            | tee "$RUNNER_TEMP/sc004-evidence/runner.log"
+          statuses=("${PIPESTATUS[@]}")
+          set -e
+          printf 'RUNNER_EXIT=%s\nTEE_EXIT=%s\n' "${statuses[0]}" "${statuses[1]}" > "$RUNNER_TEMP/sc004-evidence/exit.txt"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test -z "$(git status --porcelain)"
+          test "${statuses[0]}" = 0
+          test "${statuses[1]}" = 0
+
+      - name: Validate individual results and real mutation counts
+        id: results
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' 2>&1 | tee "$RUNNER_TEMP/sc004-evidence/results-validation.log"
+          import collections, csv, json, os, pathlib
+          evidence = pathlib.Path(os.environ['RUNNER_TEMP']) / 'sc004-evidence'
+          runtime = evidence / 'runtime'
+          def rows(name):
+              with (runtime / name).open(newline='', encoding='utf-8') as f:
+                  return list(csv.DictReader(f))
+          def indexed(items):
+              result = {r['id']: r for r in items}
+              assert len(result) == len(items), 'duplicate result IDs'
+              return result
+          normal_rows = rows('results.csv')
+          self_rows = rows('selftests.csv')
+          mutation_rows = rows('mutations.csv')
+          normal, selftests, mutations = map(indexed, [normal_rows, self_rows, mutation_rows])
+          assert normal_rows and self_rows and mutation_rows, 'empty evidence'
+          assert all(r['result'] in ('PASS','REPORT','INVALID') for r in normal_rows)
+          assert all(r['result'] == 'PASS' for r in normal_rows if r['classification'].startswith('BLOCKING'))
+          assert all(r['result'] == 'PASS' for r in self_rows)
+          invalid = normal['M20-INVALID']
+          assert (invalid['expected'],invalid['observed'],invalid['result']) == ('INVALID','INVALID','INVALID')
+          assert [r['id'] for r in normal_rows if r['result']=='INVALID'] == ['M20-INVALID']
+          expected_valid = {f'M{i}' for i in list(range(1,20)) + [22,23,24]}
+          assert set(mutations) == expected_valid | {'M20'}
+          assert mutations['M20']['status'] == 'INVALID'
+          assert all(mutations[k]['status'] == 'KILLED' for k in expected_valid)
+          assert 'M21' not in mutations and 'M21-ZERO-ROW' not in normal
+          assert selftests['M21-ZERO-ROW']['observed'] == 'INCONCLUSIVE'
+          counts = collections.Counter(r['status'] for r in mutation_rows)
+          exported_counts = {r['status']:int(r['count']) for r in rows('mutation-counts.csv')}
+          assert exported_counts == dict(counts)
+          def selfcheck(id, observed, *tokens):
+              r = selftests[id]
+              assert r['observed'] == observed, (id,r)
+              for token in tokens: assert token in r['detail'], (id,token,r)
+          selfcheck('R57-COUNT-NULL','INCONCLUSIVE',' reason=STATE_NULL ',' sqlstate= message=',
+                    ' before_id=aa100000-0000-0000-0000-000000000001 ')
+          selfcheck('R58-PARAMETER-DECOY-LIMITATION','FALSE_GREEN_REPRODUCED')
+          for id in ('R58-DML-PARAMETER-DECOY','R58-DML-PARAMETER-COMMENT',
+                     'R58-COUNT-PARAMETER-DECOY','R58-RPC-PARAMETER-DECOY',
+                     'R58-STATE-PARAMETER-DECOY','R58-STATE-SIDE-EFFECT'):
+              selfcheck(id,'INCONCLUSIVE',' reason=SQL_NOT_APPROVED ','operation_executed=false')
+          composite = 'ac000000-0000-0000-0000-000000000011|aa000000-0000-0000-0000-000000000009'
+          for suffix in ('REORDER','DELETE','OWNER-REORDER','OWNER-DELETE'):
+              r = normal['R53-H2-'+suffix]
+              assert r['result']=='PASS'
+              assert r['observed']==('ALLOW' if suffix.startswith('OWNER') else 'DENY')
+              for key in ('op_target_id','declared_target_id','before_id','after_id'):
+                  assert key+'='+composite in r['detail']
+          selfcheck('R58-COMPOSITE-WRONG-QUESTION','INCONCLUSIVE',' reason=TARGET_MISMATCH ')
+          selfcheck('R58-COMPOSITE-MISSING-QUESTION','INCONCLUSIVE',' reason=TARGET_NOT_FOUND ')
+          selfcheck('R56-BOUND-DIVERGENT-TARGET','INCONCLUSIVE',' reason=TARGET_MISMATCH ')
+          selfcheck('R56-BOUND-MALFORMED-ID','INCONCLUSIVE',' reason=STATE_QUERY_ERROR ',' sqlstate=22P02 message=')
+          for id, observed in [('R58-RPC-NO-SETUP','DENY'),('R58-RPC-SETUP-SUCCESS','ALLOW'),
+                               ('R58-LEGACY-RPC-SETUP-SUCCESS','ALLOW')]: selfcheck(id,observed)
+          selfcheck('R58-RPC-SETUP-ERROR','INCONCLUSIVE',' reason=SETUP_ERROR ',' sqlstate=42501 message=')
+          selfcheck('R58-LEGACY-RPC-SETUP-ERROR','SETUP_ERROR',' sqlstate=42501 message=')
+          for id in ('R58-RPC-SETUP-SUCCESS','R58-LEGACY-RPC-SETUP-SUCCESS'):
+              assert selftests[id]['state_before'] and selftests[id]['state_before']==selftests[id]['state_after']
+          assert 'STATUS=RUNTIME_COMPLETED' in (runtime/'status.txt').read_text()
+          metadata = (runtime/'metadata.txt').read_text()
+          assert 'SHA='+os.environ['CANDIDATE_SHA'] in metadata
+          assert 'CANONICAL_MIGRATIONS=49' in metadata
+          assert len(list(runtime.glob('migration-*.sql.log')))==49
+          assert 'MUTATION_EVIDENCE' in (runtime/'qa-runtime.log').read_text()
+          summary = dict(candidate_sha=os.environ['CANDIDATE_SHA'], control_sha=os.environ['GITHUB_SHA'],
+                         normal_counts=dict(collections.Counter(r['result'] for r in normal_rows)),
+                         selftest_counts=dict(collections.Counter(r['result'] for r in self_rows)),
+                         killed=counts['KILLED'], survived=counts['SURVIVED'], invalid=counts['INVALID'],
+                         valid_mutations=counts['KILLED']+counts['SURVIVED'], m20='INVALID', m21='SELFTEST',
+                         verdict='RUNTIME PASS')
+          (evidence/'summary.json').write_text(json.dumps(summary,indent=2)+'\n')
+          print(json.dumps(summary,indent=2))
+          PY
+
+      - name: Cleanup leftover disposable containers
+        id: cleanup
+        if: always()
+        run: |
+          set -euo pipefail
+          # This is a fresh GitHub-hosted VM dedicated to this one job.
+          # No broad pruning or host/shared database operation.
+          mapfile -t ids < <(docker ps -aq --filter label=kora.qa=sc004-r58)
+          for id in "${ids[@]}"; do
+            [[ "$id" =~ ^[a-f0-9]{12,64}$ ]] || exit 1
+            docker rm -f "$id" > /dev/null
+          done
+          test -z "$(docker ps -aq --filter label=kora.qa=sc004-r58)"
+
+      - name: Package evidence even on failure
+        id: package
+        if: always()
+        env:
+          CLEANUP_OUTCOME: ${{ steps.cleanup.outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/sc004-evidence"
+          if [ ! -f "$RUNNER_TEMP/sc004-evidence/summary.json" ]; then
+            printf '{"verdict":"BLOCKED","runtime_pass":false,"killed":null,"survived":null}\n' \
+              > "$RUNNER_TEMP/sc004-evidence/summary.json"
+          fi
+          python3 - <<'PY'
+          import json, os, pathlib
+          p=pathlib.Path(os.environ['RUNNER_TEMP'])/'sc004-evidence'/'summary.json'
+          s=json.loads(p.read_text())
+          s['cleanup']=os.environ['CLEANUP_OUTCOME']
+          if s['cleanup'] != 'success': s['verdict']='BLOCKED'
+          p.write_text(json.dumps(s,indent=2)+'\n')
+          PY
+          cd "$RUNNER_TEMP/sc004-evidence"
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          cat summary.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve full evidence
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sc004-r58-d35fdaa-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/sc004-evidence/
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Final fail-closed gate
+        if: always()
+        env:
+          PREPARE: ${{ steps.prepare.outcome }}
+          RUNTIME: ${{ steps.runtime.outcome }}
+          RESULTS: ${{ steps.results.outcome }}
+          UPLOAD: ${{ steps.upload.outcome }}
+          CLEANUP: ${{ steps.cleanup.outcome }}
+          PACKAGE: ${{ steps.package.outcome }}
+        run: |
+          test "$PREPARE" = success
+          test "$RUNTIME" = success
+          test "$RESULTS" = success
+          test "$UPLOAD" = success
+          test "$CLEANUP" = success
+          test "$PACKAGE" = success
