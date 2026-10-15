@@ -75,13 +75,11 @@ run_psql() {
 redact_log() { sed "s/${POSTGRES_PASSWORD}/[REDACTED]/g" | tee "$evidence/$1"; }
 
 run_psql supabase_admin <<'SQL' 2>&1 | redact_log bootstrap-auth.log
-\getenv qa_password PGPASSWORD
-ALTER ROLE postgres PASSWORD :'qa_password';
-\unset qa_password
 SET ROLE supabase_auth_admin;
 ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS email_confirmed_at timestamptz;
 RESET ROLE;
 SQL
+bash tests/school/configure-sc004-scram.sh "$container_id" "$evidence" 2>&1 | redact_log auth-preflight.log
 run_psql postgres -f /tmp/sc004-r58/bootstrap.sql 2>&1 | redact_log bootstrap.log
 run_psql postgres <<'SQL' 2>&1 | redact_log default-acl.log
 GRANT CONNECT, CREATE ON DATABASE kora_ci TO postgres;
@@ -116,6 +114,7 @@ SELECT set_config('kora.ci.dblink_password', :'qa_password', false) AS ignored_p
 SET kora.ci.dblink_host = '127.0.0.1';
 SET kora.ci.dblink_port = '5432';
 SELECT version();
+\i /tmp/sc004-r58/sql/sc004_dblink_auth_qa.sql
 \i /tmp/sc004-r58/sql/sc004_ab_qa.sql
 \i /tmp/sc004-r58/sql/sc004_cd_mutation_qa.sql
 \copy (select * from qa_results order by id) to '/tmp/sc004-r58/results.csv' csv header
