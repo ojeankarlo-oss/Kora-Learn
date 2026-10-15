@@ -29,4 +29,29 @@ assert(auth.includes('SC004_DBLINK_AUTH: PASS'));
 assert(auth.includes('credential diagnostics suppressed'));
 assert(runner.indexOf('configure-sc004-scram.sh') < runner.indexOf('run_psql postgres -f'));
 assert(runner.indexOf('\\i /tmp/sc004-r58/sql/sc004_dblink_auth_qa.sql') < runner.indexOf('\\i /tmp/sc004-r58/sql/sc004_ab_qa.sql'));
-console.log(JSON.stringify({result:'STATIC PASS',patch:'A',frozenExpectationsUnchanged:true,scramPrecedenceAndNegativeProbesPrepared:true,runtime:'NOT RUN'},null,2));
+const migration='051_kora_school_sc004_trigger_execute_acl.sql';
+const inventory=read('tests/school/sc004-r58-migrations.txt').trim().split('\n');
+const actual=fs.readdirSync('supabase/migrations').filter(n=>/^\d{3}_.*\.sql$/.test(n)).sort();
+assert.deepEqual(inventory,actual);
+assert.equal(inventory.length,50);
+assert.deepEqual(inventory.map(n=>Number(n.slice(0,3))),Array.from({length:51},(_,i)=>i+1).filter(n=>n!==41));
+assert.equal(inventory.at(-1),migration);
+const historical=execFileSync('git',['ls-tree','-r','--name-only',frozen,'supabase/migrations'],{encoding:'utf8'}).trim().split('\n');
+assert.equal(historical.length,49);
+for(const p of historical)assert.equal(read(p),original(p),'historical migration changed: '+p);
+const acl=read('supabase/migrations/'+migration);
+for(const name of ['sc004_assignment_lifecycle','sc004_validate_parent_integrity']) {
+  assert(acl.includes('REVOKE EXECUTE ON FUNCTION public.'+name+'()\n  FROM PUBLIC, anon, authenticated, service_role;'));
+}
+assert(acl.includes("has_function_privilege(target_role,target_function,'EXECUTE') IS DISTINCT FROM false"));
+assert(!/\b(?:GRANT|CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION|ALTER\s+(?:ROLE|POLICY|TABLE))\b/i.test(acl.replace(/--[^\n]*/g,'')));
+const regression=read('tests/school/sql/sc004_trigger_acl_qa.sql');
+for(const marker of ['aclexplode','pg_has_role','has_table_privilege','has_schema_privilege',
+  'permission denied for function ','R58-ACL-INSTALLED-TRIGGERS',
+  'R58-ACL-LEGITIMATE-LIFECYCLE','R58-ACL-CROSS-TENANT-INTEGRITY',
+  "failure_state='23514'",'professor fora do tenant da atribuicao',"result<>'PASS'",'<>10'])assert(regression.includes(marker),marker);
+assert(runner.includes('${#migrations[@]} == 50 && ${#expected_migrations[@]} == 50'));
+assert(runner.includes('${migrations[$i]##*/} == "${expected_migrations[$i]}"'));
+console.log(JSON.stringify({result:'STATIC PASS',patches:['A','B'],frozenExpectationsUnchanged:true,
+  scramPrecedenceAndNegativeProbesPrepared:true,historicalMigrationsUnchanged:historical.length,
+  canonicalMigrations:inventory.length,newMigration:migration,aclRegressionCases:10,runtime:'NOT RUN'},null,2));

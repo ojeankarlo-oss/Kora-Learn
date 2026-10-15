@@ -90,7 +90,10 @@ ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
 SQL
 
 mapfile -t migrations < <(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | LC_ALL=C sort)
-[[ ${#migrations[@]} -gt 0 ]] || { echo 'BLOCKED: canonical migrations missing' >&2; exit 2; }
+mapfile -t expected_migrations < tests/school/sc004-r58-migrations.txt
+[[ ${#migrations[@]} == 50 && ${#expected_migrations[@]} == 50 ]] || {
+  echo 'BLOCKED: expected 49 historical migrations plus SC004 ACL migration 051' >&2; exit 2;
+}
 declare -A prefixes=()
 for migration in "${migrations[@]}"; do
   name=${migration##*/}
@@ -99,6 +102,13 @@ for migration in "${migrations[@]}"; do
   [[ -z ${prefixes[$prefix]:-} ]] || { echo "BLOCKED: duplicate migration prefix $prefix" >&2; exit 2; }
   prefixes[$prefix]=$name
 done
+for ((i=0; i<${#migrations[@]}; i++)); do
+  [[ ${migrations[$i]##*/} == "${expected_migrations[$i]}" ]] || {
+    echo 'BLOCKED: canonical migration inventory mismatch' >&2; exit 2;
+  }
+done
+cp tests/school/sc004-r58-migrations.txt "$evidence/migration-inventory.txt"
+sha256sum "${migrations[@]}" > "$evidence/migration-source-sha256.txt"
 for migration in "${migrations[@]}"; do
   name=${migration##*/}
   run_psql postgres -f "/tmp/sc004-r58/migrations/$name" 2>&1 | redact_log "migration-$name.log"
@@ -116,6 +126,7 @@ SET kora.ci.dblink_port = '5432';
 SELECT version();
 \i /tmp/sc004-r58/sql/sc004_dblink_auth_qa.sql
 \i /tmp/sc004-r58/sql/sc004_ab_qa.sql
+\i /tmp/sc004-r58/sql/sc004_trigger_acl_qa.sql
 \i /tmp/sc004-r58/sql/sc004_cd_mutation_qa.sql
 \copy (select * from qa_results order by id) to '/tmp/sc004-r58/results.csv' csv header
 \copy (select * from qa_selftest_results order by id) to '/tmp/sc004-r58/selftests.csv' csv header

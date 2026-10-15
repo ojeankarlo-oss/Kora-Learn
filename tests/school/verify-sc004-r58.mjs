@@ -103,7 +103,7 @@ const runner = read('tests/school/run-sc004-r58.sh');
 assert(runner.includes('--network none'));
 assert(!/--publish|--network host/.test(runner));
 assert(runner.includes('-v ON_ERROR_STOP=1'));
-assert(runner.includes('\\i /tmp/sc004-r58/sql/sc004_ab_qa.sql\n\\i /tmp/sc004-r58/sql/sc004_cd_mutation_qa.sql'));
+assert(runner.includes('\\i /tmp/sc004-r58/sql/sc004_ab_qa.sql\n\\i /tmp/sc004-r58/sql/sc004_trigger_acl_qa.sql\n\\i /tmp/sc004-r58/sql/sc004_cd_mutation_qa.sql'));
 console.log(JSON.stringify({
   check: 'STATIC QA ONLY', result: 'PASS',
   approvedStatementPairs: templates.length, boundCalls: boundCalls.length,
