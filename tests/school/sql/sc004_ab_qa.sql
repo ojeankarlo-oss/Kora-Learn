@@ -1786,7 +1786,7 @@ select pg_temp.qa_probe_actor_dml_bound('R54-M4-ZERO-ROW-SELFTEST','INCONCLUSIVE
 select pg_temp.qa_probe_actor_dml_bound('R56-BOUND-DIVERGENT-TARGET','INCONCLUSIVE','HARNESS SELF-TEST','DML target A with independent state target B must remain inconclusive','a3000000-0000-0000-0000-000000000005','aa000000-0000-0000-0000-000000009998','aa000000-0000-0000-0000-000000000009','delete from public.questoes where id=$1::uuid','select id::text, coalesce(enunciado,''<NULL>'') from public.questoes where id=$1::uuid');
 select pg_temp.qa_probe_actor_dml_bound('R56-BOUND-MALFORMED-ID','INCONCLUSIVE','HARNESS SELF-TEST','Malformed target identifier must produce SQLSTATE 22P02 in the owner-state query','a3000000-0000-0000-0000-000000000005','not-a-uuid','not-a-uuid','delete from public.questoes where id=$1::uuid','select id::text, coalesce(enunciado,''<NULL>'') from public.questoes where id=$1::uuid');
 select pg_temp.qa_probe_actor_dml_bound('R56-BOUND-NULL-STATE','INCONCLUSIVE','HARNESS SELF-TEST','A NULL state for an existing target is not existence proof','a3000000-0000-0000-0000-000000000005','aa000000-0000-0000-0000-000000000009','aa000000-0000-0000-0000-000000000009','delete from public.questoes where id=$1::uuid','select id::text, NULL::text from public.questoes where id=$1::uuid');
-DO $
+DO $$
 DECLARE v_observed text; v_id text;
 BEGIN
   FOREACH v_id IN ARRAY ARRAY['R57-COUNT-NULL','R56-BOUND-DIVERGENT-TARGET','R56-BOUND-MALFORMED-ID'] LOOP
