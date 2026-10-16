@@ -49,9 +49,9 @@ const regression=read('tests/school/sql/sc004_trigger_acl_qa.sql');
 for(const marker of ['aclexplode','pg_has_role','has_table_privilege','has_schema_privilege',
   'permission denied for function ','R58-ACL-INSTALLED-TRIGGERS',
   'R58-ACL-LEGITIMATE-LIFECYCLE','R58-ACL-CROSS-TENANT-INTEGRITY',
-  "failure_state='23514'",'professor fora do tenant da atribuicao',"result<>'PASS'",'<>10'])assert(regression.includes(marker),marker);
+  "failure_state='23514'",'professor fora do tenant da atribuicao',"result<>'PASS'",'<>13'])assert(regression.includes(marker),marker);
 assert(runner.includes('${#migrations[@]} == 50 && ${#expected_migrations[@]} == 50'));
 assert(runner.includes('${migrations[$i]##*/} == "${expected_migrations[$i]}"'));
 console.log(JSON.stringify({result:'STATIC PASS',patches:['A','B'],frozenExpectationsUnchanged:true,
   scramPrecedenceAndNegativeProbesPrepared:true,historicalMigrationsUnchanged:historical.length,
-  canonicalMigrations:inventory.length,newMigration:migration,aclRegressionCases:10,runtime:'NOT RUN'},null,2));
+  canonicalMigrations:inventory.length,newMigration:migration,aclRegressionCases:13,runtime:'NOT RUN'},null,2));

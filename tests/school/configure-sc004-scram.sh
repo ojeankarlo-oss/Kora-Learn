@@ -83,20 +83,32 @@ SELECT pg_reload_conf() AS reloaded \gset
 SQL
 qa_hba_inventory > "$qa_evidence/hba-after.csv"
 # pg_hba_file_rules describes the file, not loaded state. Probe new sessions too.
-sleep 1
 qa_negative_auth() {
-  local qa_mode=$1 qa_bad_password=$2 qa_expected=$3 qa_output qa_code
-  set +e
-  qa_output=$(docker exec --env PGPASSWORD="$qa_bad_password" --env PGPASSFILE=/dev/null \
-    --env PGCONNECT_TIMEOUT=5 "$qa_container" psql -X -w -h 127.0.0.1 \
-    -U postgres -d kora_ci -v ON_ERROR_STOP=1 -c 'SELECT 1' 2>&1)
-  qa_code=$?
-  set -e
-  if [[ "$qa_code" != 2 || "$qa_output" != *"$qa_expected"* ]]; then
+  local qa_mode=$1 qa_bad_password=$2 qa_expected=$3 qa_output qa_code qa_attempt qa_limit=1
+  [[ "$qa_mode" != AUTH_NO_PASSWORD ]] || qa_limit=10
+  for ((qa_attempt=1; qa_attempt<=qa_limit; qa_attempt++)); do
+    set +e
+    qa_output=$(docker exec --env PGPASSWORD="$qa_bad_password" --env PGPASSFILE=/dev/null \
+      --env PGCONNECT_TIMEOUT=5 "$qa_container" psql -X -w -h 127.0.0.1 \
+      -U postgres -d kora_ci -v ON_ERROR_STOP=1 -c 'SELECT 1' 2>&1)
+    qa_code=$?
+    set -e
+    if [[ "$qa_code" == 2 && "$qa_output" == *"$qa_expected"* ]]; then
+      printf '%s=DENIED expected_authentication_failure=true exit=%s\n' "$qa_mode" "$qa_code"
+      return 0
+    fi
+    # Only an accepted passwordless session can mean reload propagation.
+    # Network/daemon failures and unrelated authentication errors fail now.
+    if [[ "$qa_mode" == AUTH_NO_PASSWORD && "$qa_code" == 0 && "$qa_attempt" -lt "$qa_limit" ]]; then
+      printf 'HBA_PROPAGATION_PENDING attempt=%s limit=%s\n' "$qa_attempt" "$qa_limit"
+      sleep 0.1
+      continue
+    fi
     printf 'BLOCKED: %s unexpected authentication outcome exit=%s (raw diagnostic suppressed)\n' "$qa_mode" "$qa_code"
     exit 2
-  fi
-  printf '%s=DENIED expected_authentication_failure=true exit=%s\n' "$qa_mode" "$qa_code"
+  done
+  echo 'BLOCKED: SCRAM propagation probe exhausted'
+  exit 2
 }
 qa_negative_auth AUTH_NO_PASSWORD '' 'no password supplied'
 qa_negative_auth AUTH_WRONG_PASSWORD 'sc004-negative-not-a-real-secret' 'password authentication failed'
