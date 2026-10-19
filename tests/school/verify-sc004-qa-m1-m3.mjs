@@ -16,6 +16,13 @@ assert.equal(cd,original('tests/school/sql/sc004_cd_mutation_qa.sql'));
 assert.equal([...cd.matchAll(/insert into qa_mutation_results values \('(M\d+)','KILLED'/g)].length,22);
 assert(cd.includes("qa_expect_result('M20-INVALID','INVALID')"));
 assert(!sql.includes('insert into qa_mutation_results'));
+const bindingStart=sql.indexOf('DO $binding$');
+const bindingEnd=sql.indexOf('$binding$;',bindingStart);
+assert(bindingStart>=0 && bindingEnd>bindingStart,'binding block must exist');
+const binding=sql.slice(bindingStart,bindingEnd);
+assert(binding.includes('EXECUTE FUNCTION public.%I()'));
+assert(binding.includes("failure_state='42501' AND failure_message='permission denied for function public.'||function_name"));
+assert(!/\b(?:LIKE|ILIKE|strpos)\b/i.test(binding),'binding must retain exact error comparison');
 const gate=source=>source.slice(source.indexOf('DO $gate$'));
 assert.equal(gate(sql),gate(before).replace('<>10','<>13'));
 // Two retained named-grant rows + one MEMBER reachability row; mutated FAIL
@@ -55,4 +62,4 @@ assert(!/(?:printf|echo)[^\n]*\$qa_output/.test(setup));
 assert(setup.includes('raw diagnostic suppressed'));
 console.log(JSON.stringify({result:'STATIC PASS',base,m1:'PASS/DENY -> FAIL/ALLOW -> PASS/DENY assertions prepared',
   m2:'MEMBER vs USAGE and rolled-back QA-only NOINHERIT fixture',m3:'maximum 10 passwordless probes; only pre-reload success is retried',
-  retainedR58NormalRows:13,frozenCDMutationGroups:22,m20:'INVALID',runtime:'NOT RUN',blocker1:'NOT ADDRESSED'},null,2));
+  retainedR58NormalRows:13,frozenCDMutationGroups:22,m20:'INVALID',runtime:'NOT RUN',blocker1:'FIXED (static); runtime NOT RUN'},null,2));

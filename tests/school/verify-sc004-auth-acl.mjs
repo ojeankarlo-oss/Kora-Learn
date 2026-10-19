@@ -47,7 +47,7 @@ assert(acl.includes("has_function_privilege(target_role,target_function,'EXECUTE
 assert(!/\b(?:GRANT|CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION|ALTER\s+(?:ROLE|POLICY|TABLE))\b/i.test(acl.replace(/--[^\n]*/g,'')));
 const regression=read('tests/school/sql/sc004_trigger_acl_qa.sql');
 for(const marker of ['aclexplode','pg_has_role','has_table_privilege','has_schema_privilege',
-  'permission denied for function ','R58-ACL-INSTALLED-TRIGGERS',
+  "failure_state='42501' AND failure_message='permission denied for function public.'||function_name",'R58-ACL-INSTALLED-TRIGGERS',
   'R58-ACL-LEGITIMATE-LIFECYCLE','R58-ACL-CROSS-TENANT-INTEGRITY',
   "failure_state='23514'",'professor fora do tenant da atribuicao',"result<>'PASS'",'<>13'])assert(regression.includes(marker),marker);
 assert(runner.includes('${#migrations[@]} == 50 && ${#expected_migrations[@]} == 50'));

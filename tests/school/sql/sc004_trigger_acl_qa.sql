@@ -112,7 +112,7 @@ BEGIN
         RAISE EXCEPTION '__QA_ACL_BIND_ROLLBACK__';
       EXCEPTION WHEN OTHERS THEN
         GET STACKED DIAGNOSTICS failure_state=RETURNED_SQLSTATE,failure_message=MESSAGE_TEXT;
-        IF failure_state='42501' AND failure_message='permission denied for function '||function_name THEN
+        IF failure_state='42501' AND failure_message='permission denied for function public.'||function_name THEN
           observed := 'DENY';
         ELSIF failure_message <> '__QA_ACL_BIND_ROLLBACK__' THEN
           observed := 'INCONCLUSIVE';
