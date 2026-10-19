@@ -1,0 +1,342 @@
+name: SC004 R5.8 isolated runtime gate
+run-name: SC004 R5.8 THIRD 683a3ed runtime attempt ${{ github.run_attempt }}
+
+# The first approved push publishes the candidate AND starts this job.
+# No workflow_dispatch dependency on the default branch.
+on:
+  push:
+    branches: [ci/sc004-r58-third-683a3ed-20261019]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sc004-r58-third-683a3ed
+  cancel-in-progress: false
+
+jobs:
+  sc004-runtime:
+    if: github.repository == 'ojeankarlo-oss/Kora-Learn' && github.event.deleted == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    env:
+      CANDIDATE_SHA: 683a3ed858ccbe5225309c978b09f1344587d5cf
+      CANDIDATE_PARENT: 2a5b0ca51845759da8927db0fb0ed19197ca044b
+      BUNDLE_SHA256: 389301a2660b3febacb54614c44b89f2b0f52596eb5dfa02a68d68af133ce2cd
+      SC004_QA_IMAGE: supabase/postgres:15.14.1.167
+
+    steps:
+      - name: Checkout orchestration commit only
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+          path: control
+
+      - name: Verify bundle and import immutable candidate
+        id: prepare
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/sc004-evidence"
+          exec > >(tee "$RUNNER_TEMP/sc004-evidence/preflight.log") 2>&1
+          test "$GITHUB_REF" = refs/heads/ci/sc004-r58-third-683a3ed-20261019
+          test "$(git -C control rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git -C control rev-parse HEAD^)" = "$CANDIDATE_SHA"
+          printf '%s\n' .github/workflows/sc004-r58-runtime.yml .qa/sc004-r58.bundle > "$RUNNER_TEMP/sc004-expected-scope"
+          git -C control diff --name-only HEAD^ HEAD > "$RUNNER_TEMP/sc004-actual-scope"
+          diff -u "$RUNNER_TEMP/sc004-expected-scope" "$RUNNER_TEMP/sc004-actual-scope"
+          printf '%s  control/.qa/sc004-r58.bundle\n' "$BUNDLE_SHA256" | sha256sum -c -
+          git clone --no-local --branch fix/sc004-r58-blocker1 control/.qa/sc004-r58.bundle candidate
+          git -C candidate bundle verify "$GITHUB_WORKSPACE/control/.qa/sc004-r58.bundle"
+          test "$(git -C candidate rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git -C candidate rev-parse HEAD^)" = "$CANDIDATE_PARENT"
+          test "$(git -C candidate branch --show-current)" = fix/sc004-r58-blocker1
+          test -z "$(git -C candidate status --porcelain)"
+          for tool in node python3 docker openssl sha256sum timeout; do command -v "$tool"; done
+          node --version
+          python3 --version
+          docker version
+          printf 'CANDIDATE_SHA=%s\nCANDIDATE_PARENT=%s\nCONTROL_SHA=%s\nRUN_ID=%s\nRUN_ATTEMPT=%s\nBUNDLE_SHA256=%s\n' \
+            "$CANDIDATE_SHA" "$CANDIDATE_PARENT" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$BUNDLE_SHA256" \
+            > "$RUNNER_TEMP/sc004-evidence/identity.txt"
+          git -C candidate ls-tree -r "$CANDIDATE_SHA" supabase/migrations > "$RUNNER_TEMP/sc004-evidence/migration-tree.txt"
+          git -C candidate fsck --full
+          cd candidate
+          node tests/school/verify-sc004-r58.mjs 2>&1 | tee "$RUNNER_TEMP/sc004-evidence/static-r58.log"
+          node tests/school/verify-sc004-auth-acl.mjs 2>&1 | tee "$RUNNER_TEMP/sc004-evidence/static-auth-acl.log"
+          node tests/school/verify-sc004-qa-m1-m3.mjs 2>&1 | tee "$RUNNER_TEMP/sc004-evidence/static-m1-m3.log"
+          bash -n tests/school/run-sc004-r58.sh
+          bash -n tests/school/configure-sc004-scram.sh
+          git diff --check
+          sha256sum tests/school/sc004-r58-migrations.txt tests/school/sql/*.sql tests/school/*.mjs tests/school/*.sh tests/payments/sql/bootstrap.sql supabase/migrations/*.sql > "$RUNNER_TEMP/sc004-evidence/source-SHA256SUMS"
+          sha256sum -c "$RUNNER_TEMP/sc004-evidence/source-SHA256SUMS"
+          python3 - <<'PYCOMPILE' 2>&1 | tee "$RUNNER_TEMP/sc004-evidence/python-static-compile.log"
+          import ast, pathlib, re, textwrap
+          workflow = pathlib.Path('../control/.github/workflows/sc004-r58-runtime.yml').read_text()
+          blocks = re.findall(r"^[ \t]*python3 - <<'PY'[^\n]*\n(.*?)^[ \t]*PY[ \t]*$",workflow,re.M|re.S)
+          assert len(blocks)==2, 'expected result and packaging validators'
+          for index, code in enumerate(blocks): ast.parse(textwrap.dedent(code),filename=f'workflow-python-{index}')
+          print('INLINE_PYTHON_STATIC_COMPILE=PASS blocks=2')
+          PYCOMPILE
+
+      - name: Prepare pinned disposable PostgreSQL image
+        run: |
+          set -euo pipefail
+          docker pull "$SC004_QA_IMAGE" 2>&1 | tee "$RUNNER_TEMP/sc004-evidence/image-pull.log"
+          docker image inspect "$SC004_QA_IMAGE" > "$RUNNER_TEMP/sc004-evidence/image-resolved.json"
+
+      - name: Execute 50 migrations and auth A/B R58 C/D in one psql session
+        id: runtime
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          export SC004_QA_EVIDENCE_DIR="$RUNNER_TEMP/sc004-evidence/runtime"
+          set +e
+          timeout --signal=TERM --kill-after=20s 15m bash tests/school/run-sc004-r58.sh 2>&1 \
+            | tee "$RUNNER_TEMP/sc004-evidence/runner.log"
+          statuses=("${PIPESTATUS[@]}")
+          set -e
+          printf 'RUNNER_EXIT=%s\nTEE_EXIT=%s\n' "${statuses[0]}" "${statuses[1]}" > "$RUNNER_TEMP/sc004-evidence/exit.txt"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test -z "$(git status --porcelain)"
+          test "${statuses[0]}" = 0
+          test "${statuses[1]}" = 0
+
+      - name: Validate individual results and real mutation counts
+        id: results
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' 2>&1 | tee "$RUNNER_TEMP/sc004-evidence/results-validation.log"
+          import collections, csv, json, os, pathlib, re, hashlib
+          evidence = pathlib.Path(os.environ['RUNNER_TEMP']) / 'sc004-evidence'
+          runtime = evidence / 'runtime'
+          def rows(name):
+              with (runtime / name).open(newline='', encoding='utf-8') as f:
+                  return list(csv.DictReader(f))
+          def indexed(items):
+              result = {r['id']: r for r in items}
+              assert len(result) == len(items), 'duplicate result IDs'
+              return result
+          normal_rows = rows('results.csv')
+          self_rows = rows('selftests.csv')
+          mutation_rows = rows('mutations.csv')
+          normal, selftests, mutations = map(indexed, [normal_rows, self_rows, mutation_rows])
+          assert normal_rows and self_rows and mutation_rows, 'empty evidence'
+          assert all(r['result'] in ('PASS','REPORT','INVALID') for r in normal_rows)
+          assert all(r['result'] == 'PASS' for r in normal_rows if r['classification'].startswith('BLOCKING'))
+          assert all(r['result'] == 'PASS' for r in self_rows)
+          assert all(r['expected']==r['observed'] for r in normal_rows+self_rows if r['result']=='PASS')
+          assert not any(r['result']=='PASS' and r['observed'] in ('INCONCLUSIVE','NOT RUN','NOT_RUN','SKIPPED','INVALID','STOP') for r in normal_rows)
+          ab_source = pathlib.Path('candidate/tests/school/sql/sc004_ab_qa.sql').read_text()
+          required_ab = set(re.findall(r"^select\s+pg_temp\.qa_(?:record|probe_[a-z0-9_]+)\('([^']+)'",ab_source,re.I|re.M))
+          assert required_ab and required_ab <= set(normal) | set(selftests), 'missing individual A/B results'
+          invalid = normal['M20-INVALID']
+          assert (invalid['expected'],invalid['observed'],invalid['result']) == ('INVALID','INVALID','INVALID')
+          assert [r['id'] for r in normal_rows if r['result']=='INVALID'] == ['M20-INVALID']
+          expected_valid = {f'M{i}' for i in list(range(1,20)) + [22,23,24]}
+          assert set(mutations) == expected_valid | {'M20'}
+          assert mutations['M20']['status'] == 'INVALID'
+          assert all(mutations[k]['status'] == 'KILLED' for k in expected_valid)
+          assert 'M21' not in mutations and 'M21-ZERO-ROW' not in normal
+          assert selftests['M21-ZERO-ROW']['observed'] == 'INCONCLUSIVE'
+          counts = collections.Counter(r['status'] for r in mutation_rows)
+          exported_counts = {r['status']:int(r['count']) for r in rows('mutation-counts.csv')}
+          assert exported_counts == dict(counts)
+          def selfcheck(id, observed, *tokens):
+              r = selftests[id]
+              assert r['observed'] == observed, (id,r)
+              for token in tokens: assert token in r['detail'], (id,token,r)
+          selfcheck('R57-COUNT-NULL','INCONCLUSIVE',' reason=STATE_NULL ',' sqlstate= message=',
+                    ' before_id=aa100000-0000-0000-0000-000000000001 ')
+          selfcheck('R58-PARAMETER-DECOY-LIMITATION','FALSE_GREEN_REPRODUCED')
+          for id in ('R58-DML-PARAMETER-DECOY','R58-DML-PARAMETER-COMMENT',
+                     'R58-COUNT-PARAMETER-DECOY','R58-RPC-PARAMETER-DECOY',
+                     'R58-STATE-PARAMETER-DECOY','R58-STATE-SIDE-EFFECT'):
+              selfcheck(id,'INCONCLUSIVE',' reason=SQL_NOT_APPROVED ','operation_executed=false')
+          composite = 'ac000000-0000-0000-0000-000000000011|aa000000-0000-0000-0000-000000000009'
+          for suffix in ('REORDER','DELETE','OWNER-REORDER','OWNER-DELETE'):
+              r = normal['R53-H2-'+suffix]
+              assert r['result']=='PASS'
+              assert r['observed']==('ALLOW' if suffix.startswith('OWNER') else 'DENY')
+              for key in ('op_target_id','declared_target_id','before_id','after_id'):
+                  assert key+'='+composite in r['detail']
+          selfcheck('R58-COMPOSITE-WRONG-QUESTION','INCONCLUSIVE',' reason=TARGET_MISMATCH ')
+          selfcheck('R58-COMPOSITE-MISSING-QUESTION','INCONCLUSIVE',' reason=TARGET_NOT_FOUND ')
+          selfcheck('R56-BOUND-DIVERGENT-TARGET','INCONCLUSIVE',' reason=TARGET_MISMATCH ')
+          selfcheck('R56-BOUND-MALFORMED-ID','INCONCLUSIVE',' reason=STATE_QUERY_ERROR ',' sqlstate=22P02 message=')
+          for id, observed in [('R58-RPC-NO-SETUP','DENY'),('R58-RPC-SETUP-SUCCESS','ALLOW'),
+                               ('R58-LEGACY-RPC-SETUP-SUCCESS','ALLOW')]: selfcheck(id,observed)
+          selfcheck('R58-RPC-SETUP-ERROR','INCONCLUSIVE',' reason=SETUP_ERROR ',' sqlstate=42501 message=')
+          selfcheck('R58-LEGACY-RPC-SETUP-ERROR','SETUP_ERROR',' sqlstate=42501 message=')
+          for id in ('R58-RPC-SETUP-SUCCESS','R58-LEGACY-RPC-SETUP-SUCCESS'):
+              assert selftests[id]['state_before'] and selftests[id]['state_before']==selftests[id]['state_after']
+          assert 'STATUS=RUNTIME_COMPLETED' in (runtime/'status.txt').read_text()
+          metadata = (runtime/'metadata.txt').read_text()
+          assert 'SHA='+os.environ['CANDIDATE_SHA'] in metadata
+          assert 'CANONICAL_MIGRATIONS=50' in metadata
+          assert len(list(runtime.glob('migration-*.sql.log')))==50
+          log = (runtime/'qa-runtime.log').read_text()
+          assert 'MUTATION_EVIDENCE' in log
+          assert re.search(r'PostgreSQL 15\.',log), 'wrong PostgreSQL major'
+          auth = (runtime/'auth-preflight.log').read_text()
+          for token in ('AUTH_NO_PASSWORD=DENIED expected_authentication_failure=true exit=2',
+                        'AUTH_WRONG_PASSWORD=DENIED expected_authentication_failure=true exit=2',
+                        'AUTH_VALID_PASSWORD=CONNECTED'):
+              assert token in auth, token
+          assert 'SC004_DBLINK_AUTH: PASS (password-authenticated non-superuser)' in log
+          with (runtime/'hba-after.csv').open(newline='') as f:
+              hba = list(csv.DictReader(f))
+          assert hba and all(r['invalid']=='f' for r in hba)
+          first = hba[0]
+          assert (first['type'],first['database'],first['user_name'],first['address'],first['auth_method']) == ('host','{kora_ci}','{postgres}','127.0.0.1','scram-sha-256')
+          serial = normal['R53-M1-SERIALIZATION']
+          assert (serial['expected'],serial['observed'],serial['result']) == ('SERIALIZED','SERIALIZED','PASS')
+          assert 'overlap=true' in serial['detail']
+          pids = re.search(r'pid1=(\d+) pid2=(\d+)',serial['detail'])
+          assert pids and pids[1] != pids[2]
+          funcs = ('sc004_assignment_lifecycle','sc004_validate_parent_integrity')
+          actors = ('anon','authenticated','service_role')
+          binding_ids = {f'R58-ACL-BIND-{f}-{a}' for f in funcs for a in actors}
+          expected_acl = binding_ids | {'R58-ACL-EFFECTIVE-NO-INHERITED-EXECUTE',
+              'R58-ACL-MEMBERSHIP-SET-ROLE','R58-ACL-NAMED-GRANT-BASELINE',
+              'R58-ACL-NAMED-GRANT-ROLLBACK','R58-ACL-INSTALLED-TRIGGERS',
+              'R58-ACL-LEGITIMATE-LIFECYCLE','R58-ACL-CROSS-TENANT-INTEGRITY'}
+          acl = {k:v for k,v in normal.items() if k.startswith('R58-ACL-')}
+          assert len(acl)==13 and set(acl)==expected_acl
+          assert all(r['result']=='PASS' for r in acl.values())
+          for f in funcs:
+              for a in actors:
+                  r = acl[f'R58-ACL-BIND-{f}-{a}']
+                  assert (r['expected'],r['observed']) == ('DENY','DENY')
+                  assert r['detail'] == 'schema_usage=true table_trigger=true sqlstate=42501 message=permission denied for function public.'+f
+          for k in ('R58-ACL-NAMED-GRANT-BASELINE','R58-ACL-NAMED-GRANT-ROLLBACK',
+                    'R58-ACL-EFFECTIVE-NO-INHERITED-EXECUTE','R58-ACL-MEMBERSHIP-SET-ROLE'):
+              assert (acl[k]['expected'],acl[k]['observed'])==('DENY','DENY')
+          assert 'R58-ACL-NAMED-GRANT-MUTATED' not in normal
+          assert re.search(r'R58-ACL-NAMED-GRANT-MUTATED\s*\|\s*DENY\s*\|\s*ALLOW\s*\|\s*FAIL\s*\|',log)
+          assert 'R58_NAMED_GRANT: baseline PASS/DENY; mutation FAIL/ALLOW detected; rollback PASS/DENY' in log
+          selfcheck('R58-ACL-NOINHERIT-SELFTEST','SET_ROLE_ONLY',
+                    'MEMBER=true USAGE=false effective_execute=false potential_execute=true; rollback=true')
+          assert not (set(normal) & set(selftests)), 'self-tests counted as normal results'
+          for name in ('migration-inventory.txt',):
+              assert (runtime/name).read_bytes() == pathlib.Path('candidate/tests/school/sc004-r58-migrations.txt').read_bytes()
+          assert len((runtime/'migration-source-sha256.txt').read_text().splitlines())==50
+          for checksum_file, prefix in [(evidence/'source-SHA256SUMS',pathlib.Path('candidate')),
+                                        (runtime/'migration-source-sha256.txt',pathlib.Path('candidate'))]:
+              for line in checksum_file.read_text().splitlines():
+                  digest, rel = line.split('  ',1)
+                  assert hashlib.sha256((prefix/rel).read_bytes()).hexdigest()==digest, rel
+          expected_logs = {'migration-'+n+'.log' for n in (runtime/'migration-inventory.txt').read_text().splitlines()}
+          assert {p.name for p in runtime.glob('migration-*.sql.log')} == expected_logs
+          assert counts == {'KILLED':22,'INVALID':1}
+          assert 'EXIT_CODE=0' in (runtime/'status.txt').read_text()
+          (evidence/'r58-individual-results.json').write_text(json.dumps(acl,indent=2)+'\n')
+          summary = dict(candidate_sha=os.environ['CANDIDATE_SHA'], control_sha=os.environ['GITHUB_SHA'],
+                         normal_counts=dict(collections.Counter(r['result'] for r in normal_rows)),
+                         selftest_counts=dict(collections.Counter(r['result'] for r in self_rows)),
+                         killed=counts['KILLED'], survived=counts['SURVIVED'], invalid=counts['INVALID'],
+                         valid_mutations=counts['KILLED']+counts['SURVIVED'], m20='INVALID', m21='SELFTEST',
+                         r58_pass=13, binding_denials=6, canonical_migrations=50,
+                         auth='SCRAM/passwordless/wrong-password/dblink non-superuser confirmed',
+                         run_url=f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+                         verdict='RUNTIME PASS')
+          (evidence/'summary.json').write_text(json.dumps(summary,indent=2)+'\n')
+          print(json.dumps(summary,indent=2))
+          PY
+
+      - name: Cleanup leftover disposable containers
+        id: cleanup
+        if: always()
+        run: |
+          set +x
+          set -euo pipefail
+          # This is a fresh GitHub-hosted VM dedicated to this one job.
+          # No broad pruning or host/shared database operation.
+          mkdir -p "$RUNNER_TEMP/sc004-evidence/runtime"
+          qa_ids=$(docker ps -aq --filter label=kora.qa=sc004-r58)
+          ids=()
+          if [[ -n "$qa_ids" ]]; then mapfile -t ids <<< "$qa_ids"; fi
+          for id in "${ids[@]}"; do
+            [[ "$id" =~ ^[a-f0-9]{12,64}$ ]] || exit 1
+            # Recover evidence if the bounded runner was killed before its trap.
+            # Read the disposable random hex password into memory; never log inspect.
+            qa_password=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$id" | sed -n 's/^POSTGRES_PASSWORD=//p')
+            if [[ ! "$qa_password" =~ ^[a-f0-9]{48}$ ]]; then
+              docker rm -f "$id" > /dev/null
+              echo 'BLOCKED: cannot safely redact leftover container logs'
+              exit 1
+            fi
+            docker logs "$id" 2>&1 | sed "s/${qa_password}/[REDACTED]/g" > "$RUNNER_TEMP/sc004-evidence/runtime/container-recovered-$id.log"
+            docker rm -f "$id" > /dev/null
+            unset qa_password
+          done
+          test -z "$(docker ps -aq --filter label=kora.qa=sc004-r58)"
+
+      - name: Package evidence even on failure
+        id: package
+        if: always()
+        env:
+          CLEANUP_OUTCOME: ${{ steps.cleanup.outcome }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/sc004-evidence"
+          if [ ! -f "$RUNNER_TEMP/sc004-evidence/summary.json" ]; then
+            printf '{"verdict":"BLOCKED","runtime_pass":false,"killed":null,"survived":null}\n' \
+              > "$RUNNER_TEMP/sc004-evidence/summary.json"
+          fi
+          python3 - <<'PY'
+          import json, os, pathlib
+          p=pathlib.Path(os.environ['RUNNER_TEMP'])/'sc004-evidence'/'summary.json'
+          s=json.loads(p.read_text())
+          s['cleanup']=os.environ['CLEANUP_OUTCOME']
+          s['candidate_sha']=os.environ['CANDIDATE_SHA']
+          s['control_sha']=os.environ['GITHUB_SHA']
+          s['run_url']=f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          s['artifact_name']=f"sc004-r58-third-683a3ed-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
+          s['artifact_listing_url']=s['run_url']+'#artifacts'
+          s['evidence_files']=sorted(str(f.relative_to(p.parent)) for f in p.parent.rglob('*') if f.is_file())
+          s['csv_available']={n:(p.parent/'runtime'/n).is_file() for n in ('results.csv','selftests.csv','mutations.csv','mutation-counts.csv')}
+          if s['cleanup'] != 'success': s['verdict']='BLOCKED'
+          s['runtime_pass']=s['verdict']=='RUNTIME PASS'
+          p.write_text(json.dumps(s,indent=2)+'\n')
+          PY
+          cd "$RUNNER_TEMP/sc004-evidence"
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          cat summary.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve full evidence
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sc004-r58-third-683a3ed-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/sc004-evidence/
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Final fail-closed gate
+        if: always()
+        env:
+          PREPARE: ${{ steps.prepare.outcome }}
+          RUNTIME: ${{ steps.runtime.outcome }}
+          RESULTS: ${{ steps.results.outcome }}
+          UPLOAD: ${{ steps.upload.outcome }}
+          CLEANUP: ${{ steps.cleanup.outcome }}
+          PACKAGE: ${{ steps.package.outcome }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        run: |
+          printf 'Run: https://github.com/%s/actions/runs/%s\nArtifact: %s\nArtifact ID: %s\n' "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$ARTIFACT_URL" "$ARTIFACT_ID" >> "$GITHUB_STEP_SUMMARY"
+          test "$PREPARE" = success
+          test "$RUNTIME" = success
+          test "$RESULTS" = success
+          test "$UPLOAD" = success
+          test "$CLEANUP" = success
+          test "$PACKAGE" = success
+          test -n "$ARTIFACT_URL"
+          test -n "$ARTIFACT_ID"
