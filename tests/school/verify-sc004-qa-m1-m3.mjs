@@ -10,7 +10,13 @@ const sqlPath='tests/school/sql/sc004_trigger_acl_qa.sql';
 const sql=read(sqlPath), before=original(sqlPath);
 assert.equal(git('diff','--name-only',base,'--','supabase/migrations',
   'tests/school/sql/sc004_ab_qa.sql','tests/school/sql/sc004_cd_mutation_qa.sql',
-  'tests/school/run-sc004-r58.sh','tests/school/sc004-r58-migrations.txt','.github/workflows').trim(),'');
+  'tests/school/sc004-r58-migrations.txt','.github/workflows').trim(),'');
+// The runner freeze admits only the reviewed socket-to-loopback readiness delta.
+const runnerPath='tests/school/run-sc004-r58.sh';
+const oldReady='pg_isready -U supabase_admin -d kora_ci';
+const tcpReady='pg_isready -h 127.0.0.1 -p 5432 -U supabase_admin -d kora_ci';
+assert.equal(original(runnerPath).split(oldReady).length,2);
+assert.equal(read(runnerPath),original(runnerPath).replace(oldReady,tcpReady));
 const cd=read('tests/school/sql/sc004_cd_mutation_qa.sql');
 assert.equal(cd,original('tests/school/sql/sc004_cd_mutation_qa.sql'));
 assert.equal([...cd.matchAll(/insert into qa_mutation_results values \('(M\d+)','KILLED'/g)].length,22);

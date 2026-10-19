@@ -11,6 +11,9 @@ for(const p of ['tests/school/sql/sc004_ab_qa.sql','tests/school/sql/sc004_cd_mu
 const setup=read('tests/school/configure-sc004-scram.sh');
 const auth=read('tests/school/sql/sc004_dblink_auth_qa.sql');
 const runner=read('tests/school/run-sc004-r58.sh');
+assert(runner.includes('docker exec "$container_id" pg_isready -h 127.0.0.1 -p 5432 -U supabase_admin -d kora_ci > /dev/null 2>&1'));
+assert(runner.includes('for ((i=0; i<90; i++)); do'));
+assert(runner.includes('[[ "$ready" == true ]] || { echo \'BLOCKED: disposable PostgreSQL did not become ready\' >&2; exit 2; }'));
 for(const token of [
   'host kora_ci postgres 127.0.0.1/32 scram-sha-256',
   'ORDER BY line_number LIMIT 1', 'pg_reload_conf()',

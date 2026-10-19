@@ -55,7 +55,7 @@ container_id=$(docker run --detach --pull=never --network none \
 
 ready=false
 for ((i=0; i<90; i++)); do
-  if docker exec "$container_id" pg_isready -U supabase_admin -d kora_ci > /dev/null 2>&1; then
+  if docker exec "$container_id" pg_isready -h 127.0.0.1 -p 5432 -U supabase_admin -d kora_ci > /dev/null 2>&1; then
     ready=true
     break
   fi
