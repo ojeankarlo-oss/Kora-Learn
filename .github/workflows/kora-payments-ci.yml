@@ -285,16 +285,13 @@ jobs:
       - name: Run School cross-tenant academic integrity tests
         run: psql -v ON_ERROR_STOP=1 -f tests/school/sql/cross_tenant_academic_integrity_qa.sql
 
-      - name: Run School SC-004 A/B fail-closed security suite
+      - name: Run SC-004 R5.8 homologated harness (isolated container)
+        shell: bash
         run: |
-          psql -v ON_ERROR_STOP=1 <<'SQL'
-          \getenv dblink_password PGPASSWORD
-          SET kora.ci.dblink_host = '127.0.0.1';
-          SET kora.ci.dblink_port = '5432';
-          SET kora.ci.dblink_password = :'dblink_password';
-          \i tests/school/sql/sc004_ab_qa.sql
-          \i tests/school/sql/sc004_cd_mutation_qa.sql
-          SQL
+          set -euo pipefail
+          docker pull supabase/postgres:15.14.1.167
+          export SC004_QA_EVIDENCE_DIR="$RUNNER_TEMP/sc004-evidence"
+          timeout --signal=TERM --kill-after=20s 15m bash tests/school/run-sc004-r58.sh
 
       - name: Run real PostgreSQL payment invariants
         run: psql -v ON_ERROR_STOP=1 -f tests/payments/sql/p0_payments_qa.sql
