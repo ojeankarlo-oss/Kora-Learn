@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   payments-ci:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
       postgres:
@@ -81,55 +81,19 @@ jobs:
       - name: Bootstrap disposable Supabase compatibility schemas
         run: psql -v ON_ERROR_STOP=1 -f tests/payments/sql/bootstrap.sql
 
-      - name: Prove migration 040 fail-closed preflight on corrupted legacy data
+      - name: Configure Supabase-faithful public default privileges
         shell: bash
         run: |
           set -euo pipefail
-          export LC_ALL=C
-          createdb -U supabase_admin --template=kora_ci kora_sc003_corrupt
-          export PGDATABASE=kora_sc003_corrupt
-
-          for migration in $(find supabase/migrations -maxdepth 1 -type f ! -name '040_*' -print | sort); do
-            psql -v ON_ERROR_STOP=1 -f "$migration"
-          done
-
-          psql -v ON_ERROR_STOP=1 <<'SQL'
-          insert into public.tenants(id,nome,slug) values
-            ('ea000000-0000-0000-0000-000000000001','Preflight A','sc003-preflight-a'),
-            ('ea000000-0000-0000-0000-000000000002','Preflight B','sc003-preflight-b');
-          insert into public.cursos(id,tenant_id,nome) values
-            ('eb000000-0000-0000-0000-000000000001','ea000000-0000-0000-0000-000000000002','Course B');
-          insert into public.disciplinas(id,curso_id,tenant_id,nome) values
-            ('ec000000-0000-0000-0000-000000000001','eb000000-0000-0000-0000-000000000001','ea000000-0000-0000-0000-000000000001','Corrupt R01');
+          # Reproduce the dangerous default-ACL class found by the audit;
+          # migration 049 must explicitly remove it from School Core roles.
+          psql -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          GRANT CONNECT, CREATE ON DATABASE kora_ci TO postgres;
+          GRANT USAGE, CREATE ON SCHEMA public TO postgres;
+          ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+            GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES
+            ON TABLES TO anon, authenticated;
           SQL
-
-          set +e
-          preflight_output=$(psql -v ON_ERROR_STOP=1 -f supabase/migrations/040_kora_school_cross_tenant_integrity.sql 2>&1)
-          preflight_status=$?
-          set -e
-          printf '%s\n' "$preflight_output"
-          if [[ $preflight_status -eq 0 ]]; then
-            echo 'SC003 PREFLIGHT FAIL: migration 040 unexpectedly succeeded'
-            exit 1
-          fi
-          if [[ "$preflight_output" != *'SC003-R01 TENANT_MISMATCH count=1'* ]]; then
-            echo 'SC003 PREFLIGHT FAIL: expected R01 tenant mismatch was not identified'
-            exit 1
-          fi
-
-          psql -v ON_ERROR_STOP=1 -At <<'SQL' | grep -Fx 'PRECHECK_UNCHANGED|1|ea000000-0000-0000-0000-000000000001|ea000000-0000-0000-0000-000000000002'
-          select 'PRECHECK_UNCHANGED',count(*),d.tenant_id,c.tenant_id
-          from public.disciplinas d join public.cursos c on c.id=d.curso_id
-          where d.id='ec000000-0000-0000-0000-000000000001'
-          group by d.tenant_id,c.tenant_id;
-          SQL
-          psql -v ON_ERROR_STOP=1 -At <<'SQL' | grep -Fx 'MIGRATION_040_NOT_APPLIED'
-          select case
-            when not exists(select 1 from information_schema.columns where table_schema='public' and table_name='avaliacao_questoes' and column_name='tenant_id')
-             and not exists(select 1 from pg_constraint where conname like '%\_sc003' escape '\')
-            then 'MIGRATION_040_NOT_APPLIED' else 'MIGRATION_040_PARTIALLY_APPLIED' end;
-          SQL
-          echo 'SC003 CORRUPTED LEGACY PREFLIGHT: PASS'
 
       - name: Validate and replay canonical migrations
         shell: bash
@@ -166,6 +130,169 @@ jobs:
           done
           echo "MIGRATION REPLAY: PASS (${#migrations[@]} migrations)"
 
+      - name: Prove SC-004 HB1 fails closed when migration 040 is absent
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          # Supabase_admin owns disposable database setup; a separate
+          # NOSUPERUSER role is the migration/replay actor. Application
+          # security actors remain anon/authenticated inside the SQL probes.
+          admin_user=supabase_admin
+          app_user=kora_hb1_app
+          admin_password=local_ci_fixture_only
+          app_password=local_ci_fixture_only
+          db=kora_sc004_r5_hb1
+          cleanup() {
+            local status=$?
+            if PGPASSWORD="$admin_password" dropdb --if-exists -U "$admin_user" "$db" >/dev/null 2>&1; then
+              echo 'HB1_CLEANUP: PASS'
+            else
+              echo 'HB1_CLEANUP: FAIL'
+              status=1
+            fi
+            if PGPASSWORD="$admin_password" psql -U "$admin_user" -d postgres -v ON_ERROR_STOP=1 -c "DROP ROLE IF EXISTS $app_user" >/dev/null 2>&1; then
+              echo 'HB1_ROLE_CLEANUP: PASS'
+            else
+              echo 'HB1_ROLE_CLEANUP: FAIL'
+              status=1
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          # HB1 must start from a truly pristine database. Cloning kora_ci here
+          # would replay 001-039 on an already migrated template and fail on
+          # pre-existing objects before the 040 preflight is exercised.
+          PGPASSWORD="$admin_password" dropdb --if-exists -U "$admin_user" "$db" >/dev/null 2>&1 || true
+          PGPASSWORD="$admin_password" psql -U "$admin_user" -d postgres -v ON_ERROR_STOP=1 <<SQL
+          DROP ROLE IF EXISTS $app_user;
+          CREATE ROLE $app_user LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT PASSWORD '$app_password';
+          GRANT supabase_auth_admin, supabase_storage_admin TO $app_user;
+          CREATE DATABASE $db OWNER $app_user;
+          SQL
+          export PGPASSWORD="$admin_password"
+          export PGDATABASE="$db"
+
+          # Recreate only the disposable Supabase compatibility layer that the
+          # service database has before application migrations. The application
+          # schema itself remains pristine until the prefix replay below.
+          psql -U "$admin_user" -v ON_ERROR_STOP=1 <<SQL
+          CREATE EXTENSION IF NOT EXISTS pgcrypto;
+          CREATE EXTENSION IF NOT EXISTS dblink;
+          CREATE SCHEMA auth;
+          CREATE SCHEMA extensions;
+          CREATE SCHEMA storage;
+          CREATE SCHEMA vault;
+          CREATE EXTENSION IF NOT EXISTS pg_net;
+          CREATE OR REPLACE FUNCTION extensions.gen_random_uuid() RETURNS uuid LANGUAGE sql VOLATILE AS \$\$ SELECT public.gen_random_uuid() \$\$;
+          CREATE OR REPLACE FUNCTION extensions.gen_random_bytes(p_length integer) RETURNS bytea LANGUAGE sql VOLATILE AS \$\$ SELECT public.gen_random_bytes(p_length) \$\$;
+          CREATE OR REPLACE FUNCTION extensions.digest(p_data text, p_type text) RETURNS bytea LANGUAGE sql IMMUTABLE AS \$\$ SELECT public.digest(p_data, p_type) \$\$;
+          CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS \$\$ SELECT NULLIF(current_setting('request.jwt.claim.sub', true), '')::uuid; \$\$;
+          CREATE TABLE auth.users (id uuid PRIMARY KEY, email text UNIQUE NOT NULL, email_confirmed_at timestamptz);
+          ALTER TABLE auth.users OWNER TO supabase_auth_admin;
+          CREATE TABLE vault.decrypted_secrets (name text PRIMARY KEY, decrypted_secret text);
+          ALTER SCHEMA auth OWNER TO supabase_auth_admin;
+          ALTER SCHEMA storage OWNER TO supabase_storage_admin;
+          ALTER DATABASE "$db" SET search_path = public, extensions;
+          GRANT USAGE ON SCHEMA auth, storage, extensions, vault, net TO $app_user, supabase_auth_admin, anon, authenticated, service_role;
+          GRANT SELECT ON auth.users TO $app_user, supabase_auth_admin;
+          GRANT EXECUTE ON FUNCTION auth.uid() TO PUBLIC;
+          GRANT USAGE, CREATE ON SCHEMA public TO $app_user;
+          GRANT USAGE, CREATE ON SCHEMA storage TO supabase_storage_admin;
+          GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+          GRANT CONNECT, CREATE ON DATABASE "$db" TO $app_user;
+          GRANT USAGE ON SCHEMA auth TO $app_user;
+          GRANT SELECT, REFERENCES ON auth.users TO $app_user;
+          SQL
+          app_is_superuser=$(PGPASSWORD="$admin_password" psql -U "$admin_user" -d postgres -At -c "select rolsuper from pg_roles where rolname='$app_user'")
+          if [[ "$app_is_superuser" != 'f' ]]; then
+            echo "SC-004 HB1 FAIL: application replay actor must be NOSUPERUSER (got '$app_is_superuser')"
+            exit 1
+          fi
+
+          pristine_public_tables=$(psql -U "$admin_user" -At -c "select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind in ('r','p');")
+          if [[ "$pristine_public_tables" != "0" ]]; then
+            echo "SC-004 HB1 FAIL: pristine bootstrap already contains public tables ($pristine_public_tables)"
+            exit 1
+          fi
+          echo "HB1_SETUP: PASS (supabase_admin bootstrap; $app_user replay actor NOSUPERUSER; SQL actors remain anon/authenticated)"
+
+          bootstrap_copy=$(mktemp)
+          trap 'rm -f "$bootstrap_copy"; cleanup' EXIT
+          sed -e "s/kora_ci/$db/g" \
+              -e "s/\\\\connect $db postgres/\\\\connect $db $admin_user/g" \
+              -e "s/ to postgres;/ to $app_user;/g" \
+              tests/payments/sql/bootstrap.sql > "$bootstrap_copy"
+          # The compatibility bootstrap runs under the admin/bootstrap actor;
+          # replay then runs under the distinct NOSUPERUSER application actor.
+          PGPASSWORD="$admin_password" psql -U "$admin_user" -v ON_ERROR_STOP=1 -f "$bootstrap_copy"
+          export PGUSER="$app_user" PGPASSWORD="$app_password"
+          psql -U "$app_user" -v ON_ERROR_STOP=1 <<'SQL'
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public
+            GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, TRIGGER, REFERENCES
+            ON TABLES TO anon, authenticated;
+          SQL
+
+          for migration in $(find supabase/migrations -maxdepth 1 -type f -print | sort); do
+            name=$(basename "$migration")
+            prefix=${name%%_*}
+            if [[ "$prefix" =~ ^[0-9]{3}$ ]] && (( 10#$prefix < 40 )); then
+              psql -v ON_ERROR_STOP=1 -f "$migration"
+            fi
+          done
+
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          insert into public.tenants(id,nome,slug) values
+            ('fa000000-0000-0000-0000-000000000001','HB1 Preflight A','sc004-r5-hb1-a'),
+            ('fa000000-0000-0000-0000-000000000002','HB1 Preflight B','sc004-r5-hb1-b');
+          insert into public.cursos(id,tenant_id,nome) values
+            ('fb000000-0000-0000-0000-000000000001','fa000000-0000-0000-0000-000000000002','HB1 Course B');
+          insert into public.disciplinas(id,curso_id,tenant_id,nome) values
+            ('fc000000-0000-0000-0000-000000000001','fb000000-0000-0000-0000-000000000001','fa000000-0000-0000-0000-000000000001','HB1 Corrupt Subject');
+          SQL
+
+          set +e
+          preflight_output=$(psql -v ON_ERROR_STOP=1 -f supabase/migrations/040_kora_school_cross_tenant_integrity.sql 2>&1)
+          preflight_status=$?
+          set -e
+          printf '%s\n' "$preflight_output"
+          if [[ $preflight_status -eq 0 ]]; then
+            echo 'SC-004 HB1 FAIL: migration 040 unexpectedly succeeded without its preflight target'
+            exit 1
+          fi
+          if [[ "$preflight_output" != *'SC003-R01 TENANT_MISMATCH count=1'* ]]; then
+            echo 'SC-004 HB1 FAIL: expected tenant mismatch was not reported'
+            exit 1
+          fi
+
+          psql -v ON_ERROR_STOP=1 -At <<'SQL' | grep -Fx 'HB1_PRECHECK_UNCHANGED|1|fa000000-0000-0000-0000-000000000001|fa000000-0000-0000-0000-000000000002'
+          select 'HB1_PRECHECK_UNCHANGED',count(*),d.tenant_id,c.tenant_id
+          from public.disciplinas d join public.cursos c on c.id=d.curso_id
+          where d.id='fc000000-0000-0000-0000-000000000001'
+          group by d.tenant_id,c.tenant_id;
+          SQL
+          psql -v ON_ERROR_STOP=1 -At <<'SQL' | grep -Fx 'HB1_MIGRATION_040_NOT_APPLIED'
+          select case
+            when not exists(select 1 from information_schema.columns where table_schema='public' and table_name='avaliacao_questoes' and column_name='tenant_id')
+             and not exists(select 1 from pg_constraint where conname like '%\_sc003' escape '\')
+            then 'HB1_MIGRATION_040_NOT_APPLIED' else 'HB1_MIGRATION_040_PARTIALLY_APPLIED' end;
+          SQL
+          echo 'SC-004 HB1 PREFLIGHT: PASS'
+
+      - name: Run School session authority negative tests
+        run: psql -v ON_ERROR_STOP=1 -f tests/school/sql/session_authority_qa.sql
+
+      - name: Run School cross-tenant academic integrity tests
+        run: psql -v ON_ERROR_STOP=1 -f tests/school/sql/cross_tenant_academic_integrity_qa.sql
+
+      - name: Run SC-004 R5.8 homologated harness (isolated container)
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull supabase/postgres:15.14.1.167
+          export SC004_QA_EVIDENCE_DIR="$RUNNER_TEMP/sc004-evidence"
+          timeout --signal=TERM --kill-after=20s 15m bash tests/school/run-sc004-r58.sh
+
       - name: Run real PostgreSQL payment invariants
         run: psql -v ON_ERROR_STOP=1 -f tests/payments/sql/p0_payments_qa.sql
 
@@ -177,12 +304,6 @@ jobs:
 
       - name: Run PostgreSQL Customer API foundation invariants
         run: psql -v ON_ERROR_STOP=1 -f tests/payments/sql/p1_pay_api_customer_foundation_qa.sql
-
-      - name: Run School session authority negative tests
-        run: psql -v ON_ERROR_STOP=1 -f tests/school/sql/session_authority_qa.sql
-
-      - name: Run School cross-tenant academic integrity tests
-        run: psql -v ON_ERROR_STOP=1 -f tests/school/sql/cross_tenant_academic_integrity_qa.sql
 
       - name: Run webhook concurrency with two connections
         shell: bash
