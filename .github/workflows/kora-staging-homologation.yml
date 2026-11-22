@@ -27,7 +27,9 @@ jobs:
       KORA_STG_MODE: local
       KORA_STG_SUPABASE_CLI_VERSION: '2.122.1'
       STG: KORA-STAGING-READINESS-01/staging
-      KORA_STG_WORKDIR: ${{ runner.temp }}/kora-stg
+      # KORA_STG_WORKDIR NÃO é definido aqui: o contexto `runner` não é permitido em
+      # jobs.<id>.env (run 45039098280). provision.sh/cleanup.sh usam $RUNNER_TEMP/kora-stg
+      # e provision.sh exporta KORA_STG_WORKDIR via GITHUB_ENV para os passos seguintes.
       KORA_STG_REPORT_DIR: ${{ github.workspace }}/KORA-STAGING-READINESS-01/staging/reports
       # Identidade da execução. Baseline = migrations canônicas 001..040, sem candidato.
       # A execução candidata (fase 4) usa OUTRO branch e define KORA_STG_CANDIDATE_*.
@@ -73,10 +75,13 @@ jobs:
       - name: Build app against the LOCAL stack only
         id: build
         continue-on-error: true
-        env:
-          VITE_SUPABASE_URL: ${{ env.KORA_STG_API_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ env.KORA_STG_ANON_KEY }}
+        # KORA_STG_API_URL/KORA_STG_ANON_KEY chegam via GITHUB_ENV (provision.sh) como
+        # variáveis de processo; são lidos no shell, sem expressão `${{ env.* }}`.
         run: |
+          : "${KORA_STG_API_URL:?ausente: provision.sh não exportou via GITHUB_ENV}"
+          : "${KORA_STG_ANON_KEY:?ausente: provision.sh não exportou via GITHUB_ENV}"
+          export VITE_SUPABASE_URL="$KORA_STG_API_URL"
+          export VITE_SUPABASE_ANON_KEY="$KORA_STG_ANON_KEY"
           node "$STG/scripts/guard.mjs"
           npx vite build --outDir "$RUNNER_TEMP/kora-stg-dist" --emptyOutDir
           node "$STG/scripts/scan-bundle.mjs" "$RUNNER_TEMP/kora-stg-dist"

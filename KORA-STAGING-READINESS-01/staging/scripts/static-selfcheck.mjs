@@ -53,6 +53,67 @@ try {
   check("WF-CHECKOUT-NO-PERSISTED-TOKEN", wf.jobs.homologation.steps.some((s) => String(s.uses).startsWith("actions/checkout") && s.with?.["persist-credentials"] === false), "");
   check("WF-RUN-IDENTITY", !!wf.jobs.homologation.env?.KORA_STG_RUN_LABEL && !!wf.jobs.homologation.env?.KORA_STG_EXPECT_LAST_MIGRATION, "");
   check("WF-BUNDLE-SCAN", wfText.includes("scan-bundle.mjs"), "");
+
+  // PROVISIONING-02 (correção pós-run 45039098280): contextos de expressão permitidos por
+  // posição, conforme a tabela "Context availability" do GitHub Actions. Um contexto fora
+  // da lista invalida o arquivo inteiro e o run termina com 0 jobs.
+  // KORA_STG_SELFCHECK_WORKFLOW permite teste de mutação (workflow adulterado deve FALHAR).
+  const wfCtx = process.env.KORA_STG_SELFCHECK_WORKFLOW
+    ? YAML.parse(readFileSync(process.env.KORA_STG_SELFCHECK_WORKFLOW, "utf8")) : wf;
+  const STEP_CTX = ["github", "needs", "strategy", "matrix", "job", "runner", "env", "vars", "secrets", "steps", "inputs"];
+  const ALLOWED = {
+    "env": ["github", "secrets", "inputs", "vars"],
+    "concurrency": ["github", "inputs", "vars"],
+    "jobs.*.runs-on": ["github", "needs", "strategy", "matrix", "vars", "inputs"],
+    "jobs.*.env": ["github", "needs", "strategy", "matrix", "vars", "secrets", "inputs"],
+    "jobs.*.timeout-minutes": ["github", "needs", "strategy", "matrix", "vars", "inputs"],
+    "jobs.*.concurrency": ["github", "needs", "strategy", "matrix", "vars", "inputs"],
+    "jobs.*.if": ["github", "needs", "vars", "inputs"],
+    "jobs.*.steps.*": STEP_CTX,
+  };
+  const exprsOf = (v, implicit = false) => {
+    const s = typeof v === "string" ? v : JSON.stringify(v ?? "");
+    const out = [...s.matchAll(/\$\{\{([\s\S]*?)\}\}/g)].map((m) => m[1]);
+    return out.length || !implicit ? out : [s];
+  };
+  const namedValues = (expr) => {
+    const noStr = expr.replace(/'(?:[^']|'')*'/g, "''");
+    return [...noStr.matchAll(/(^|[^.\w-])([A-Za-z_][\w-]*)(?![\w-]*\s*\()/g)].map((m) => m[2])
+      .filter((n) => !["true", "false", "null"].includes(n));
+  };
+  const ctxViolations = [];
+  const scan = (pos, value, implicit = false) => {
+    for (const e of exprsOf(value, implicit)) for (const n of namedValues(e)) {
+      if (!ALLOWED[pos].includes(n)) ctxViolations.push(`${pos}: '${n}' em \${{${e.trim()}}}`);
+    }
+  };
+  scan("env", wfCtx.env);
+  scan("concurrency", wfCtx.concurrency);
+  const envRefViolations = [];
+  for (const [jid, job] of Object.entries(wfCtx.jobs)) {
+    scan("jobs.*.runs-on", job["runs-on"]);
+    scan("jobs.*.env", job.env);
+    scan("jobs.*.timeout-minutes", job["timeout-minutes"]);
+    scan("jobs.*.concurrency", job.concurrency);
+    if (job.if !== undefined) scan("jobs.*.if", job.if, true);
+    const declared = new Set([...Object.keys(wfCtx.env ?? {}), ...Object.keys(job.env ?? {})]);
+    for (const [i, step] of (job.steps ?? []).entries()) {
+      for (const k of ["name", "env", "with", "run", "continue-on-error", "working-directory", "timeout-minutes"]) {
+        if (step[k] !== undefined) scan("jobs.*.steps.*", step[k]);
+      }
+      if (step.if !== undefined) scan("jobs.*.steps.*", step.if, true);
+      // `${{ env.X }}` só para X declarado no YAML (workflow/job/step). Variáveis produzidas
+      // em runtime via GITHUB_ENV devem ser lidas no shell ($X), nunca por expressão.
+      const stepDeclared = new Set([...declared, ...Object.keys(step.env ?? {})]);
+      for (const e of exprsOf(JSON.stringify(step))) {
+        for (const m of e.matchAll(/\benv\.([A-Za-z_]\w*)/g)) {
+          if (!stepDeclared.has(m[1])) envRefViolations.push(`${jid}.steps[${i}]: env.${m[1]} não declarado no YAML`);
+        }
+      }
+    }
+  }
+  check("WF-CONTEXT-AVAILABILITY", ctxViolations.length === 0, ctxViolations.join("; "));
+  check("WF-NO-RUNTIME-ENV-EXPR", envRefViolations.length === 0, envRefViolations.join("; "));
 } catch (e) { results.push({ id: "WF-PARSE", status: "NOT RUN", detail: e.message }); }
 
 // 4. Esquema: colunas do seed existem nas migrations
