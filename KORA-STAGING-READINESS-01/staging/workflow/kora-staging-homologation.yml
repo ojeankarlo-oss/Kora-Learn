@@ -1,0 +1,143 @@
+# KORA-STAGING-PROVISIONING-02 — candidato de workflow (base: KORA-STAGING-READINESS-01,
+# ZIP sha256 d6e0d25f3ba616f6a8c832b5db4bca7c1e20f3cfbdcc92f8a879a84c886003a1).
+# Ativo SOMENTE em branches staging/homologation-**; nunca em main; nunca abre PR.
+# Não usa secrets do repositório, não tem permissão de Pages/deploy. Stack Supabase
+# 100% efêmero dentro do runner. Repositório PÚBLICO: logs e artefatos são públicos —
+# apenas dados sintéticos e chaves LOCAIS do stack (mascaradas) podem existir aqui.
+name: KORA Staging Homologation (ephemeral)
+
+on:
+  push:
+    branches:
+      - 'staging/homologation-**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kora-staging-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  homologation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      KORA_STG_CONFIRM: I_UNDERSTAND_DISPOSABLE
+      KORA_STG_MODE: local
+      KORA_STG_SUPABASE_CLI_VERSION: '2.122.1'
+      STG: KORA-STAGING-READINESS-01/staging
+      KORA_STG_WORKDIR: ${{ runner.temp }}/kora-stg
+      KORA_STG_REPORT_DIR: ${{ github.workspace }}/KORA-STAGING-READINESS-01/staging/reports
+      # Identidade da execução. Baseline = migrations canônicas 001..040, sem candidato.
+      # A execução candidata (fase 4) usa OUTRO branch e define KORA_STG_CANDIDATE_*.
+      KORA_STG_RUN_LABEL: baseline-040
+      KORA_STG_EXPECT_LAST_MIGRATION: '040'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Refuse unexpected branch / record identity
+        run: |
+          [[ "$GITHUB_REF" == refs/heads/staging/homologation-* ]] || { echo "ref não autorizado: $GITHUB_REF"; exit 1; }
+          echo "run_label=$KORA_STG_RUN_LABEL sha=$GITHUB_SHA ref=$GITHUB_REF"
+          ls supabase/migrations | tail -3
+          if [[ -z "${KORA_STG_CANDIDATE_MIGRATION:-}" ]] && ls supabase/migrations | grep -q '^041_'; then
+            echo "baseline contém 041 no diretório canônico"; exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install root dependencies (supabase-js, vite)
+        run: npm ci
+
+      - name: Offline self-check of the harness (must have zero FAIL)
+        run: node "$STG/scripts/static-selfcheck.mjs"
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install --yes postgresql-client
+
+      - name: Provision ephemeral Supabase stack + migrations + synthetic fixtures
+        run: bash "$STG/scripts/provision.sh"
+
+      - name: SEC-01..10 API security suites (real GoTrue/PostgREST/Storage)
+        id: api
+        continue-on-error: true
+        run: bash "$STG/scripts/verify.sh" api
+
+      - name: Build app against the LOCAL stack only
+        id: build
+        continue-on-error: true
+        env:
+          VITE_SUPABASE_URL: ${{ env.KORA_STG_API_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ env.KORA_STG_ANON_KEY }}
+        run: |
+          node "$STG/scripts/guard.mjs"
+          npx vite build --outDir "$RUNNER_TEMP/kora-stg-dist" --emptyOutDir
+          node "$STG/scripts/scan-bundle.mjs" "$RUNNER_TEMP/kora-stg-dist"
+
+      - name: Playwright UI smoke (1 browser, 1 worker)
+        id: e2e
+        continue-on-error: true
+        run: |
+          cd "$STG/e2e"
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          (cd "$GITHUB_WORKSPACE" && npx vite preview --outDir "$RUNNER_TEMP/kora-stg-dist" --host 127.0.0.1 --port 4173 --strictPort > "$RUNNER_TEMP/preview.log" 2>&1 &)
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:4173/Kora-Learn/ >/dev/null && break; sleep 1; done
+          KORA_STG_E2E_JUNIT="$KORA_STG_REPORT_DIR/junit-e2e.xml" npx playwright test --config playwright.config.mjs
+
+      - name: Recovery - restart Postgres and re-verify persistence
+        id: restart
+        continue-on-error: true
+        run: |
+          bash "$STG/scripts/recovery-restart.sh"
+          bash "$STG/scripts/verify.sh" postrestart
+
+      - name: Recovery - seed idempotency + destroy + reprovision (checksum must match)
+        id: reprovision
+        continue-on-error: true
+        run: bash "$STG/scripts/reprovision-check.sh"
+
+      - name: Versioned SQL suites on the fresh stack (simulated auth via jwt claim)
+        id: sql
+        continue-on-error: true
+        run: bash "$STG/scripts/verify.sh" sql
+
+      - name: Upload test reports (junit + summaries only; no state files)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kora-staging-reports-${{ env.KORA_STG_RUN_LABEL }}-${{ github.run_id }}
+          path: |
+            ${{ env.KORA_STG_REPORT_DIR }}/*.xml
+            ${{ env.KORA_STG_REPORT_DIR }}/*.txt
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Cleanup ephemeral stack
+        if: always()
+        run: bash "$STG/scripts/cleanup.sh"
+
+      - name: Gate (NOT RUN or FAIL never becomes PASS)
+        if: always()
+        env:
+          R_API: ${{ steps.api.outcome }}
+          R_BUILD: ${{ steps.build.outcome }}
+          R_E2E: ${{ steps.e2e.outcome }}
+          R_RESTART: ${{ steps.restart.outcome }}
+          R_REPROVISION: ${{ steps.reprovision.outcome }}
+          R_SQL: ${{ steps.sql.outcome }}
+        run: |
+          fail=0
+          for v in R_API R_BUILD R_E2E R_RESTART R_REPROVISION R_SQL; do
+            echo "$v=${!v}"
+            [[ "${!v}" == "success" ]] || fail=1
+          done
+          if (( fail )); then echo "KORA STAGING HOMOLOGATION [$KORA_STG_RUN_LABEL]: BLOCKED"; exit 1; fi
+          echo "KORA STAGING HOMOLOGATION [$KORA_STG_RUN_LABEL]: ALL GATES PASS (ainda requer auditoria independente)"

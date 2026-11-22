@@ -1,0 +1,85 @@
+{
+  "_comment": "Fixtures 100% sintéticas para KORA-STAGING-READINESS-01. Domínio .invalid (RFC 2606). Nenhuma senha aqui: a senha é gerada por execução (KORA_STG_FIXTURE_PASSWORD).",
+  "schemaVersion": 1,
+  "slugPrefix": "kora-stg-",
+  "emailDomain": "kora-staging.invalid",
+  "tenants": {
+    "A": { "id": "f1000000-0000-4000-8000-000000000001", "slug": "kora-stg-escola-alfa", "nome": "Escola Sintética Alfa" },
+    "B": { "id": "f1000000-0000-4000-8000-000000000002", "slug": "kora-stg-escola-beta", "nome": "Escola Sintética Beta" }
+  },
+  "unidades": {
+    "A": { "id": "f2000000-0000-4000-8000-000000000001", "tenant": "A", "nome": "Unidade Alfa Centro" },
+    "B": { "id": "f2000000-0000-4000-8000-000000000002", "tenant": "B", "nome": "Unidade Beta Centro" }
+  },
+  "users": {
+    "gestorA":  { "id": "f3000000-0000-4000-8000-000000000001", "tenant": "A", "perfil": "gestor",    "nome": "Gestor A Sintético",     "email": "gestor-a@kora-staging.invalid",  "auth": true,  "ativo": true },
+    "profA1":   { "id": "f3000000-0000-4000-8000-000000000002", "tenant": "A", "perfil": "professor", "nome": "Professor A1 Sintético", "email": "prof-a1@kora-staging.invalid",   "auth": true,  "ativo": true },
+    "profA2":   { "id": "f3000000-0000-4000-8000-000000000003", "tenant": "A", "perfil": "professor", "nome": "Professor A2 Sintético", "email": "prof-a2@kora-staging.invalid",   "auth": true,  "ativo": true },
+    "alunoA1":  { "id": "f3000000-0000-4000-8000-000000000004", "tenant": "A", "perfil": "aluno",     "nome": "Aluno A1 Sintético",     "email": "aluno-a1@kora-staging.invalid",  "auth": true,  "ativo": true },
+    "alunoA1b": { "id": "f3000000-0000-4000-8000-000000000005", "tenant": "A", "perfil": "aluno",     "nome": "Aluno A1b Sintético",    "email": "aluno-a1b@kora-staging.invalid", "auth": true,  "ativo": true },
+    "alunoA2":  { "id": "f3000000-0000-4000-8000-000000000006", "tenant": "A", "perfil": "aluno",     "nome": "Aluno A2 Sintético",     "email": "aluno-a2@kora-staging.invalid",  "auth": true,  "ativo": true },
+    "inativoA": { "id": "f3000000-0000-4000-8000-000000000007", "tenant": "A", "perfil": "aluno",     "nome": "Inativo A Sintético",    "email": "inativo-a@kora-staging.invalid", "auth": true,  "ativo": false },
+    "pendenteA":{ "id": "f3000000-0000-4000-8000-000000000008", "tenant": "A", "perfil": "aluno",     "nome": "Pendente A Sintético",   "email": "pendente-a@kora-staging.invalid","auth": false, "ativo": true },
+    "gestorB":  { "id": "f3000000-0000-4000-8000-000000000011", "tenant": "B", "perfil": "gestor",    "nome": "Gestor B Sintético",     "email": "gestor-b@kora-staging.invalid",  "auth": true,  "ativo": true },
+    "profB1":   { "id": "f3000000-0000-4000-8000-000000000012", "tenant": "B", "perfil": "professor", "nome": "Professor B1 Sintético", "email": "prof-b1@kora-staging.invalid",   "auth": true,  "ativo": true },
+    "alunoB1":  { "id": "f3000000-0000-4000-8000-000000000014", "tenant": "B", "perfil": "aluno",     "nome": "Aluno B1 Sintético",     "email": "aluno-b1@kora-staging.invalid",  "auth": true,  "ativo": true }
+  },
+  "cursos": {
+    "A": { "id": "f4000000-0000-4000-8000-000000000001", "tenant": "A", "nome": "Curso Sintético Alfa" },
+    "B": { "id": "f4000000-0000-4000-8000-000000000002", "tenant": "B", "nome": "Curso Sintético Beta" }
+  },
+  "disciplinas": {
+    "A": { "id": "f5000000-0000-4000-8000-000000000001", "tenant": "A", "curso": "A", "nome": "Matemática Sintética A" },
+    "B": { "id": "f5000000-0000-4000-8000-000000000002", "tenant": "B", "curso": "B", "nome": "Matemática Sintética B" }
+  },
+  "turmas": {
+    "A1": { "id": "f6000000-0000-4000-8000-000000000001", "tenant": "A", "curso": "A", "nome": "Turma A1" },
+    "A2": { "id": "f6000000-0000-4000-8000-000000000002", "tenant": "A", "curso": "A", "nome": "Turma A2" },
+    "B1": { "id": "f6000000-0000-4000-8000-000000000003", "tenant": "B", "curso": "B", "nome": "Turma B1" }
+  },
+  "matriculas": {
+    "alunoA1":  { "id": "f7000000-0000-4000-8000-000000000001", "user": "alunoA1",  "turma": "A1" },
+    "alunoA1b": { "id": "f7000000-0000-4000-8000-000000000002", "user": "alunoA1b", "turma": "A1" },
+    "alunoA2":  { "id": "f7000000-0000-4000-8000-000000000003", "user": "alunoA2",  "turma": "A2" },
+    "alunoB1":  { "id": "f7000000-0000-4000-8000-000000000004", "user": "alunoB1",  "turma": "B1" }
+  },
+  "professoresTurmas": {
+    "profA1_A1": { "id": "f8000000-0000-4000-8000-000000000001", "user": "profA1", "turma": "A1" },
+    "profA2_A2": { "id": "f8000000-0000-4000-8000-000000000002", "user": "profA2", "turma": "A2" },
+    "profB1_B1": { "id": "f8000000-0000-4000-8000-000000000003", "user": "profB1", "turma": "B1" }
+  },
+  "questoes": {
+    "A_obj":  { "id": "f9000000-0000-4000-8000-000000000001", "tenant": "A", "tipo": "objetiva",     "pontos": 2, "resposta_correta": "b" },
+    "A_diss": { "id": "f9000000-0000-4000-8000-000000000002", "tenant": "A", "tipo": "dissertativa", "pontos": 3 },
+    "B_obj":  { "id": "f9000000-0000-4000-8000-000000000003", "tenant": "B", "tipo": "objetiva",     "pontos": 2, "resposta_correta": "b" },
+    "B_diss": { "id": "f9000000-0000-4000-8000-000000000004", "tenant": "B", "tipo": "dissertativa", "pontos": 3 }
+  },
+  "avaliacoes": {
+    "A1_fluxo":       { "id": "fa000000-0000-4000-8000-000000000001", "turma": "A1", "uso": "07 consistência (alunoA1)" },
+    "A2_fluxo":       { "id": "fa000000-0000-4000-8000-000000000002", "turma": "A2", "uso": "03 autorização entre turmas (alunoA2)" },
+    "B1_fluxo":       { "id": "fa000000-0000-4000-8000-000000000003", "turma": "B1", "uso": "10 recuperação (alunoB1)" },
+    "A1_concorrencia":{ "id": "fa000000-0000-4000-8000-000000000004", "turma": "A1", "uso": "08 envio concorrente (alunoA1b)" },
+    "A1_sigilo":      { "id": "fa000000-0000-4000-8000-000000000005", "turma": "A1", "uso": "05 sigilo/gabarito e turma (alunoA1b, alunoA2)" },
+    "A1_inicio":      { "id": "fa000000-0000-4000-8000-000000000006", "turma": "A1", "uso": "08 início concorrente (alunoA1)" }
+  },
+  "registrosAula": {
+    "A1": { "id": "fb000000-0000-4000-8000-000000000001", "turma": "A1", "professor": "profA1" },
+    "A2": { "id": "fb000000-0000-4000-8000-000000000002", "turma": "A2", "professor": "profA2" }
+  },
+  "presencas": {
+    "alunoA1":  { "id": "fc000000-0000-4000-8000-000000000001", "registro": "A1", "user": "alunoA1" },
+    "alunoA1b": { "id": "fc000000-0000-4000-8000-000000000002", "registro": "A1", "user": "alunoA1b" },
+    "alunoA2":  { "id": "fc000000-0000-4000-8000-000000000003", "registro": "A2", "user": "alunoA2" }
+  },
+  "materiais": {
+    "A1": { "id": "fd000000-0000-4000-8000-000000000001", "turma": "A1", "professor": "profA1" },
+    "A2": { "id": "fd000000-0000-4000-8000-000000000002", "turma": "A2", "professor": "profA2" }
+  },
+  "avisos": {
+    "A1": { "id": "fe000000-0000-4000-8000-000000000001", "turma": "A1", "professor": "profA1" },
+    "A2": { "id": "fe000000-0000-4000-8000-000000000002", "turma": "A2", "professor": "profA2" }
+  },
+  "notMapped": {
+    "trabalhosEscolares": "Não há tabela de atividades/trabalhos/entregas no main e84ea01. 'Entregas' de avaliação = avaliacao_tentativas/avaliacao_respostas. Trabalhos Escolares (protótipo offline TASKS) NÃO TESTÁVEL nesta infraestrutura."
+  }
+}
