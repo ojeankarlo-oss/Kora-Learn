@@ -50,6 +50,12 @@ jobs:
             echo "baseline contém 041 no diretório canônico"; exit 1
           fi
 
+      # PROVISIONING-04: run 45187500465 falhou com EADDRINUSE no bind() do dockerd (54322),
+      # porta dentro da faixa efêmera do Linux. Reserva 54320-54329 contra atribuição automática
+      # ANTES do tráfego pesado (npm, pulls de imagem). bind() explícito do Docker segue permitido.
+      - name: Reserve Supabase local ports from the ephemeral port range
+        run: bash "$STG/scripts/stack-preflight.sh" reserve
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

@@ -56,18 +56,29 @@ sed -i -E 's/^(enable_confirmations) = .*/\1 = false/' "$CFG"
 rm -rf "$WORK/supabase/migrations" && mkdir -p "$WORK/supabase/migrations"
 rm -f "$WORK/supabase/seed.sql"
 
-umask 077
 # PROVISIONING-03-FIX: `supabase start` imprime as chaves LOCAIS do stack (run 45041095243).
 # A saída bruta vai para um arquivo privado no WORK (nunca em reports/, nunca no log);
 # o log público recebe apenas a versão redigida, depois que todas as chaves foram mascaradas.
+# PROVISIONING-04: umask 077 restrito à criação dos arquivos sensíveis; o próprio start
+# roda com o umask padrão, como no run 45041095243 (onde o stack subiu). O redirecionamento
+# `>` para arquivo já existente preserva o modo 0600.
 START_LOG="$WORK/.supabase-start.log"
+STACK_ENV="$WORK/.stack.env"
+( umask 077 && rm -f "$START_LOG" "$STACK_ENV" && : > "$START_LOG" && : > "$STACK_ENV" )
+
+# PROVISIONING-04: pré-voo (remanescentes, portas, reserva efêmera no Actions). Falha fechada.
+bash "$SCRIPT_DIR/stack-preflight.sh" check
+
+# Tentativa ÚNICA. Falha => saída redigida + diagnóstico não sensível + ABORT. Sem retry:
+# a limpeza fica com cleanup.sh (passo `if: always()` do workflow / reprovision-check.sh).
 if ! "${SB[@]}" start --workdir "$WORK" -x "$EXCLUDE" > "$START_LOG" 2>&1; then
   echo "KORA-STG PROVISION ABORT: supabase start falhou (saída redigida abaixo)"
   node "$SCRIPT_DIR/redact-log.mjs" "$START_LOG" | tail -n 120
+  bash "$SCRIPT_DIR/stack-preflight.sh" postmortem || true
   exit 1
 fi
 
-STACK_ENV="$WORK/.stack.env"
+umask 077
 "${SB[@]}" status --workdir "$WORK" -o env > "$STACK_ENV"
 if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
   # Máscara de TODO valor sensível do stack (ANON/SERVICE_ROLE JWT, PUBLISHABLE/SECRET,

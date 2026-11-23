@@ -302,6 +302,66 @@ check("GUARD produção negada via SUPABASE_URL", attempt({ KORA_STG_API_URL: "h
   check("PROVISION roda a regressão após migrations e antes do seed", iMig > 0 && iRegr > iMig && iRegr < iSeedAuth, "");
 }
 
+// 10. PROVISIONING-04 — inicialização do stack (run 45187500465: EADDRINUSE em 54322).
+{
+  const prov = readFileSync(join(STG, "scripts", "provision.sh"), "utf8");
+  const pre = readFileSync(join(STG, "scripts", "stack-preflight.sh"), "utf8");
+  const preCode = pre.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+  const lines = prov.split("\n");
+  const iStartLine = lines.findIndex((l) => /\bstart --workdir\b/.test(l));
+  const iUmaskLine = lines.findIndex((l) => /^umask 077\s*$/.test(l));
+  const iCheckLine = lines.findIndex((l) => /stack-preflight\.sh" check\s*$/.test(l));
+  const iCreateLine = lines.findIndex((l) => /^\( umask 077 && rm -f "\$START_LOG" "\$STACK_ENV" && : > "\$START_LOG" && : > "\$STACK_ENV" \)\s*$/.test(l));
+  check("PROVISION umask 077 global só depois do start", iStartLine > 0 && iUmaskLine > iStartLine, `start=${iStartLine} umask=${iUmaskLine}`);
+  check("PROVISION log do start e .stack.env criados 0600 (subshell umask 077) antes do start", iCreateLine > 0 && iCreateLine < iStartLine, "");
+  check("PROVISION pré-voo executado antes do start", iCheckLine > iCreateLine && iCheckLine < iStartLine, "");
+  const failBranch = lines.slice(iStartLine, iStartLine + 6).join("\n");
+  check("PROVISION falha do start: redigido + postmortem + exit 1", /redact-log\.mjs" "\$START_LOG"/.test(failBranch) && /stack-preflight\.sh" postmortem/.test(failBranch) && /\n\s*exit 1\n/.test(failBranch), "");
+  const allSh = files.filter((x) => extname(x) === ".sh").map((f) => readFileSync(f, "utf8")).join("\n");
+  const startCount = (allSh.match(/\bstart --workdir\b/g) || []).length;
+  const loopBeforeStart = lines.slice(iCheckLine, iStartLine).some((l) => /^\s*(for|while|until)\b/.test(l));
+  check("START tentativa única (1 invocação em todos os scripts, fora de laço)", startCount === 1 && !loopBeforeStart && /^if ! "\$\{SB\[@\]\}" start/.test(lines[iStartLine]), `${startCount} invocação(ões)`);
+  check("PREFLIGHT set -euo pipefail", /^set -euo pipefail$/m.test(pre), "");
+  check("PREFLIGHT nunca mata processo nem remove contêiner/volume", !/\b(kill|pkill|killall|fuser)\b|docker\s+(rm|stop|kill|restart|start|run|volume\s+rm|system\s+prune|container\s+rm)\b|\bsupabase@|\bnpx\b|\bsupabase\s+(start|stop)\b/.test(preCode), "");
+  check("PREFLIGHT não imprime env/logs de contêiner", !/docker\s+(inspect|logs|exec)\b|\bprintenv\b|^\s*env\s*$/m.test(preCode), "");
+  check("PREFLIGHT sysctl somente ip_local_reserved_ports e somente no Actions", (preCode.match(/sysctl/g) || []).length === 1 && /sysctl -q -w "net\.ipv4\.ip_local_reserved_ports=/.test(preCode) && /reserve\)\n\s*if ! in_ci; then[\s\S]{0,200}exit 0/.test(preCode), "");
+  check("PREFLIGHT diagnóstico passa pelo redator (falha do redator => suprimido, arquivo removido)", /node "\$SCRIPT_DIR\/redact-log\.mjs" "\$f" \|\| echo "KORA-STG DIAG: redator falhou; diagnóstico suprimido"\n\s*rm -f "\$f"/.test(preCode), "");
+  check("PREFLIGHT falha fechada sem ss/docker e com LISTEN/remanescentes/ocupação persistente",
+    /command -v ss[^\n]*exit 1/.test(preCode) && /docker info[^\n]*exit 1/.test(preCode) && /grep -Eq '\(\^\|\[\[:space:\]\]\)LISTEN\(\[\[:space:\]\]\|\$\)' <<< "\$socks"/.test(preCode) &&
+    /remanescentes do projeto/.test(preCode) && /seguem ocupadas/.test(preCode), "");
+  check("PREFLIGHT erro de ss/docker nunca conta como porta livre ou zero remanescentes",
+    !/\bss -Hant[^\n]*\|\|\s*true/.test(preCode) && (preCode.match(/socks="\$\(port_sockets\)" \|\| \{/g) || []).length === 2 &&
+    (preCode.match(/="\$\(docker (ps|volume ls) -[a]?q --filter "[^"]+"\)" \|\| return 1/g) || []).length === 4 && /if ! cont="\$\(project_containers\)" \|\| ! vols="\$\(project_volumes\)"; then/.test(preCode), "");
+  // Comportamento (bash local; sem Docker, sem root): parse da reserva e modo reserve fora do Actions.
+  if (bash.status === 0) {
+    const preflight = join(STG, "scripts", "stack-preflight.sh");
+    const env0 = { PATH: process.env.PATH, KORA_STG_WORKDIR: join(tmpdirSafe(), "kora-stg-preflight-selfcheck") };
+    const run = (args, extra = {}) => spawnSync("bash", [preflight, ...args], { encoding: "utf8", env: { ...env0, ...extra } });
+    const cov = (spec) => run(["_test-covers", spec]).status;
+    check("PREFLIGHT reserva: cobre faixa exata, superconjunto e lista mista", cov("54320-54329") === 0 && cov("1000-2000,54300-54400") === 0 && cov("8080, 54320-54325,54326-54329") === 0, "");
+    check("PREFLIGHT reserva: falta de qualquer porta => não coberto", cov("") === 1 && cov("54320-54328") === 1 && cov("54321-54329") === 1 && cov("lixo,54320-54329x") === 1, "");
+    const r1 = run(["reserve"], { GITHUB_ACTIONS: "" });
+    check("PREFLIGHT reserve fora do Actions não altera o host", r1.status === 0 && /ignorado fora do GitHub Actions/.test(r1.stdout), `rc=${r1.status}`);
+    check("PREFLIGHT faixa de portas inválida => abort", run(["reserve"], { KORA_STG_STACK_PORTS: "1-99999" }).status === 2 && run(["reserve"], { KORA_STG_STACK_PORTS: "54320" }).status === 2, "");
+    check("PREFLIGHT modo desconhecido => abort", run(["retry"]).status === 2, "");
+  } else {
+    results.push({ id: "PREFLIGHT comportamento", status: "NOT RUN", detail: "bash ausente" });
+  }
+  // Workflow: reserva antes de npm/pulls; limpeza sempre; gate inalterado.
+  let steps = [];
+  try { steps = createRequire(join(REPO, "package.json"))("yaml").parse(readFileSync(join(STG, "workflow", "kora-staging-homologation.yml"), "utf8")).jobs.homologation.steps; } catch {}
+  const iRes = steps.findIndex((s) => /stack-preflight\.sh" reserve/.test(String(s.run)));
+  const iNode = steps.findIndex((s) => String(s.uses).startsWith("actions/setup-node"));
+  const iNpm = steps.findIndex((s) => /npm ci/.test(String(s.run)));
+  const iProv = steps.findIndex((s) => /provision\.sh/.test(String(s.run)));
+  const clean = steps.find((s) => /cleanup\.sh/.test(String(s.run)));
+  check("WF reserva de portas antes de setup-node/npm ci/provision", iRes > 0 && iRes < iNode && iRes < iNpm && iRes < iProv, `reserve=${iRes} node=${iNode} npm=${iNpm} prov=${iProv}`);
+  check("WF reserva sem continue-on-error (falha fechada)", iRes > 0 && steps[iRes]["continue-on-error"] === undefined && steps[iRes].if === undefined, "");
+  check("WF limpeza sempre executada", !!clean && String(clean.if) === "always()", "");
+}
+
+function tmpdirSafe() { return process.env.RUNNER_TEMP || process.env.TMPDIR || process.env.TEMP || "/tmp"; }
+
 // Resultado
 const summary = results.reduce((a, r) => ((a[r.status] = (a[r.status] || 0) + 1), a), {});
 for (const r of results) if (r.status !== "PASS") console.log(`${r.status} ${r.id} ${r.detail}`);
