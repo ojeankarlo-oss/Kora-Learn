@@ -11,7 +11,7 @@ fi
 # Contêineres/volumes remanescentes do projeto kora-stg (nomes supabase_<svc>_kora-stg).
 docker ps -aq --filter "name=_kora-stg" | xargs -r docker rm -f >/dev/null || true
 docker volume ls -q --filter "name=_kora-stg" | xargs -r docker volume rm >/dev/null || true
-rm -f "$WORK/.stack.env" "$WORK/kora-stg.env" "$WORK/.state-"*.json
+rm -f "$WORK/.stack.env" "$WORK/kora-stg.env" "$WORK/.state-"*.json "$WORK/.supabase-start.log"
 left_c=$(docker ps -aq --filter "name=_kora-stg" | wc -l)
 left_v=$(docker volume ls -q --filter "name=_kora-stg" | wc -l)
 echo "KORA-STG CLEANUP: contêineres remanescentes=$left_c volumes remanescentes=$left_v"

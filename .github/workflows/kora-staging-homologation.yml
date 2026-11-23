@@ -114,8 +114,22 @@ jobs:
         continue-on-error: true
         run: bash "$STG/scripts/verify.sh" sql
 
-      - name: Upload test reports (junit + summaries only; no state files)
+      # PROVISIONING-03-FIX: artefatos são públicos. Redige chaves/senhas dos relatórios antes
+      # do upload. rc=0 limpo; rc=3 havia credencial (redigida; gate BLOCKED); outro rc = sem upload.
+      - name: Redact credentials from reports before upload
+        id: redact
         if: always()
+        continue-on-error: true
+        run: |
+          set +e
+          node "$STG/scripts/redact-log.mjs" --secrets-env "${KORA_STG_WORKDIR:-$RUNNER_TEMP/kora-stg}/.stack.env" \
+            --in-place "$KORA_STG_REPORT_DIR"
+          rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit $rc
+
+      - name: Upload test reports (junit + summaries only; no state files)
+        if: always() && (steps.redact.outputs.rc == '0' || steps.redact.outputs.rc == '3')
         uses: actions/upload-artifact@v4
         with:
           name: kora-staging-reports-${{ env.KORA_STG_RUN_LABEL }}-${{ github.run_id }}
@@ -138,9 +152,10 @@ jobs:
           R_RESTART: ${{ steps.restart.outcome }}
           R_REPROVISION: ${{ steps.reprovision.outcome }}
           R_SQL: ${{ steps.sql.outcome }}
+          R_REDACT: ${{ steps.redact.outcome }}
         run: |
           fail=0
-          for v in R_API R_BUILD R_E2E R_RESTART R_REPROVISION R_SQL; do
+          for v in R_API R_BUILD R_E2E R_RESTART R_REPROVISION R_SQL R_REDACT; do
             echo "$v=${!v}"
             [[ "${!v}" == "success" ]] || fail=1
           done

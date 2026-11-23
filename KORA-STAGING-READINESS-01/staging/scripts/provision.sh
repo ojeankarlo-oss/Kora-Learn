@@ -56,11 +56,26 @@ sed -i -E 's/^(enable_confirmations) = .*/\1 = false/' "$CFG"
 rm -rf "$WORK/supabase/migrations" && mkdir -p "$WORK/supabase/migrations"
 rm -f "$WORK/supabase/seed.sql"
 
-"${SB[@]}" start --workdir "$WORK" -x "$EXCLUDE"
+umask 077
+# PROVISIONING-03-FIX: `supabase start` imprime as chaves LOCAIS do stack (run 45041095243).
+# A saída bruta vai para um arquivo privado no WORK (nunca em reports/, nunca no log);
+# o log público recebe apenas a versão redigida, depois que todas as chaves foram mascaradas.
+START_LOG="$WORK/.supabase-start.log"
+if ! "${SB[@]}" start --workdir "$WORK" -x "$EXCLUDE" > "$START_LOG" 2>&1; then
+  echo "KORA-STG PROVISION ABORT: supabase start falhou (saída redigida abaixo)"
+  node "$SCRIPT_DIR/redact-log.mjs" "$START_LOG" | tail -n 120
+  exit 1
+fi
 
 STACK_ENV="$WORK/.stack.env"
-umask 077
 "${SB[@]}" status --workdir "$WORK" -o env > "$STACK_ENV"
+if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+  # Máscara de TODO valor sensível do stack (ANON/SERVICE_ROLE JWT, PUBLISHABLE/SECRET,
+  # JWT_SECRET, S3_*), não só os que o harness usa.
+  sed -n -E 's/^[A-Z0-9_]*(KEY|SECRET|PASSWORD|TOKEN)[A-Z0-9_]*="?([^"]+)"?$/\2/p' "$STACK_ENV" \
+    | while IFS= read -r secretish; do if [[ -n "$secretish" ]]; then echo "::add-mask::$secretish"; fi; done
+fi
+node "$SCRIPT_DIR/redact-log.mjs" --secrets-env "$STACK_ENV" "$START_LOG"
 read_var() { sed -n -E "s/^$1=\"?([^\"]*)\"?$/\1/p" "$STACK_ENV" | head -1; }
 API_URL="$(read_var API_URL)"; DB_URL="$(read_var DB_URL)"
 ANON_KEY="$(read_var ANON_KEY)"; SERVICE_ROLE_KEY="$(read_var SERVICE_ROLE_KEY)"
@@ -92,6 +107,20 @@ node "$SCRIPT_DIR/guard.mjs"
 
 # ---- Fase 2 ---------------------------------------------------------------
 bash "$SCRIPT_DIR/apply-migrations.sh" "$REPO_ROOT/supabase/migrations"
+
+# ---- Fase 2b: regressão da trava do seed no banco REAL recém-migrado -------
+# 12 cenários em subtransações desfeitas + ROLLBACK final; não deixa dados.
+psql "$KORA_STG_DB_URL" -v ON_ERROR_STOP=1 -At -f "$STG_DIR/fixtures/seed_guard_regression.sql" \
+  | tee "$WORK/seed-guard-regression.txt"
+grep -q '^KORA_STG_SEED_GUARD|' "$WORK/seed-guard-regression.txt" \
+  || { echo "KORA-STG PROVISION ABORT: regressão da trava do seed não produziu resultados"; exit 1; }
+if grep -q '^KORA_STG_SEED_GUARD|FAIL' "$WORK/seed-guard-regression.txt"; then
+  echo "KORA-STG PROVISION ABORT: regressão da trava do seed falhou"; exit 1
+fi
+if [[ -n "${KORA_STG_REPORT_DIR:-}" ]]; then
+  mkdir -p "$KORA_STG_REPORT_DIR"
+  cp "$WORK/seed-guard-regression.txt" "$KORA_STG_REPORT_DIR/seed-guard-regression.txt"
+fi
 
 # ---- Fase 3 ---------------------------------------------------------------
 node "$SCRIPT_DIR/seed-auth.mjs"

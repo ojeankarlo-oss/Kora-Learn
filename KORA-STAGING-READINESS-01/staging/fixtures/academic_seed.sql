@@ -12,17 +12,12 @@
 
 begin;
 
--- Fail-closed: o alvo precisa estar vazio ou conter apenas dados sintéticos.
+-- Fail-closed: o alvo precisa conter apenas dados sintéticos + o estado de baseline
+-- conhecido (tenant kora-demo da migration 001 e sua unidade da 004). Ver seed_guard.sql.
+\ir seed_guard.sql
 do $$
-declare v_foreign_tenants int; v_foreign_users int;
 begin
-  select count(*) into v_foreign_tenants from public.tenants where slug not like 'kora-stg-%';
-  select count(*) into v_foreign_users from auth.users
-   where email is null or email not like '%@kora-staging.invalid';
-  if v_foreign_tenants > 0 or v_foreign_users > 0 then
-    raise exception 'KORA-STG SEED ABORT: alvo contém dados não sintéticos (tenants=%, auth.users=%)',
-      v_foreign_tenants, v_foreign_users;
-  end if;
+  perform pg_temp.kora_stg_assert_seed_target();
   if (select count(*) from auth.users where email like '%@kora-staging.invalid') < 10 then
     raise exception 'KORA-STG SEED ABORT: usuários auth sintéticos ausentes; rode seed-auth.mjs antes';
   end if;
@@ -161,4 +156,4 @@ select 'KORA_STG_FIXTURE_CHECKSUM|' || md5(string_agg(x, '|' order by x)) as che
   union all select 'Q'||id||tenant_id||pontos from public.questoes where id::text like 'f9000000-%'
   union all select 'A'||id||tenant_id||coalesce(turma_id::text,'-') from public.avaliacoes where id::text like 'fa000000-%'
   union all select 'AQ'||avaliacao_id||questao_id||ordem from public.avaliacao_questoes where avaliacao_id::text like 'fa000000-%'
-) s;
+) s(x);  -- PROVISIONING-03-FIX: alias de coluna ausente ("column x does not exist" em PostgreSQL real)

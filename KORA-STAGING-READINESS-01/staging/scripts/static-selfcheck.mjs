@@ -191,7 +191,8 @@ for (const f of files.filter((x) => /\.(mjs|sh|sql|json|yml|md|toml)$/.test(x)))
 }
 
 // 7. Testes unitários do guard
-const { assertSafeTarget } = await import(new URL("./guard.mjs", import.meta.url));
+const { assertSafeTarget, PRODUCTION_REFS } = await import(new URL("./guard.mjs", import.meta.url));
+const PRODUCTION_REF_FOR_TEST = PRODUCTION_REFS[0];
 const attempt = (env) => { try { assertSafeTarget({}, env); return "ok"; } catch { return "denied"; } };
 check("GUARD local permitido", attempt({ KORA_STG_API_URL: "http://127.0.0.1:54321", KORA_STG_DB_URL: "postgresql://postgres:postgres@127.0.0.1:54322/postgres" }) === "ok");
 check("GUARD produção negada", attempt({ KORA_STG_API_URL: "https://goxaeupwxhbiobvvwnxj.supabase.co" }) === "denied");
@@ -201,6 +202,105 @@ check("GUARD remoto sem autorização negado", attempt({ KORA_STG_MODE: "remote-
 check("GUARD remoto fora da allowlist negado", attempt({ KORA_STG_MODE: "remote-staging", KORA_STG_ALLOW_REMOTE: "1", KORA_STG_API_URL: "https://xyz.supabase.co", KORA_STG_REMOTE_HOST: "abc.supabase.co" }) === "denied");
 check("GUARD remoto autorizado e na allowlist permitido", attempt({ KORA_STG_MODE: "remote-staging", KORA_STG_ALLOW_REMOTE: "1", KORA_STG_API_URL: "https://abc.supabase.co", KORA_STG_REMOTE_HOST: "abc.supabase.co" }) === "ok");
 check("GUARD sem alvo negado", attempt({}) === "denied");
+// PROVISIONING-03-FIX: mais formas de apontar para produção.
+check("GUARD produção negada via DB_URL do pooler", attempt({ KORA_STG_API_URL: "http://127.0.0.1:54321", KORA_STG_DB_URL: "postgresql://postgres." + PRODUCTION_REF_FOR_TEST + ":x@aws-0-sa-east-1.pooler.supabase.com:6543/postgres" }) === "denied");
+check("GUARD produção negada via SUPABASE_URL", attempt({ KORA_STG_API_URL: "http://127.0.0.1:54321", SUPABASE_URL: "https://" + PRODUCTION_REF_FOR_TEST + ".supabase.co" }) === "denied");
+
+// 8. PROVISIONING-03-FIX — redação de logs/relatórios (run 45041095243 publicou chaves locais).
+{
+  const { redact } = await import(new URL("./redact-log.mjs", import.meta.url));
+  // Valores FALSOS, montados por concatenação (não são chaves reais nem padrões literais).
+  const fakePub = "sb_" + "publishable_" + "FAKEpub0000000000000000_abcdef";
+  const fakeSec = "sb_" + "secret_" + "FAKEsec0000000000000000_abcdef";
+  const fakeJwt = "ey" + "J" + "hbGciOiJIUzI1NiJ9FAKEFAKE" + "." + "ey" + "J" + "yb2xlIjoiYW5vbiJ9FAKEFAKE" + "." + "FAKEsignature000000";
+  const fakeS3 = "FAKEs3secret0000000000000000000000000000";
+  const fakeEnvVal = "FAKE-runtime-value-0000";
+  const sample = [
+    "Started supabase local development setup.",
+    "╭──────────────────────────────────────╮",
+    "│ 🌐 APIs                              │",
+    "├─────────────┬────────────────────────┤",
+    "│ Project URL │ http://127.0.0.1:54321 │",
+    "╰─────────────┴────────────────────────╯",
+    "│ Publishable │ " + fakePub + " │",
+    "│ Secret      │ " + fakeSec + "      │",
+    "│ Access Key  │ FAKEaccesskey0000000000000000 │",
+    "│ Secret Key  │ " + fakeS3 + " │",
+    "| JWT secret | FAKEjwtsecret-0000000000000000 |",
+    "        anon key: " + fakeJwt,
+    "SERVICE_ROLE_KEY=\"" + fakeJwt + "\"",
+    "DB_URL=postgresql://postgres:FAKEpw000@127.0.0.1:54322/postgres",
+    "assertion failed: got " + fakeEnvVal,
+  ].join("\n");
+  const { text: red, count } = redact(sample, [fakeEnvVal]);
+  const leaked = [fakePub, fakeSec, fakeJwt, fakeS3, "FAKEaccesskey", "FAKEjwtsecret", "FAKEpw000", fakeEnvVal].filter((v) => red.includes(v));
+  check("REDACT chaves do supabase start (sb_*, JWT, S3, JWT secret, senha DB, valor runtime)", leaked.length === 0, leaked.length ? `vazou ${leaked.length} valor(es)` : `${count} redações`);
+  check("REDACT preserva diagnóstico não sensível", red.includes("http://127.0.0.1:54321") && red.includes("Started supabase local development setup.") && red.includes("127.0.0.1:54322/postgres"), "");
+  check("REDACT texto limpo fica intacto", redact("KORA-STG MIGRATIONS: PASS (40 migrations)\nok 3 - tenant isolation", []).count === 0, "");
+  // Modo --in-place: rc=3 e arquivo redigido quando há credencial; rc=0 quando limpo.
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const tdir = mkdtempSync(join(tmpdir(), "kora-stg-redact-"));
+  try {
+    writeFileSync(join(tdir, "junit-x.xml"), `<failure message="token ${fakeJwt}"/>`);
+    const r1 = spawnSync(process.execPath, [join(STG, "scripts", "redact-log.mjs"), "--in-place", tdir], { encoding: "utf8", env: { PATH: process.env.PATH } });
+    const after = readFileSync(join(tdir, "junit-x.xml"), "utf8");
+    check("REDACT --in-place: credencial em relatório -> rc=3 e redigida", r1.status === 3 && !after.includes(fakeJwt) && !r1.stdout.includes(fakeJwt), `rc=${r1.status}`);
+    const r2 = spawnSync(process.execPath, [join(STG, "scripts", "redact-log.mjs"), "--in-place", tdir], { encoding: "utf8", env: { PATH: process.env.PATH } });
+    check("REDACT --in-place: relatório limpo -> rc=0", r2.status === 0, `rc=${r2.status}`);
+  } finally { rmSync(tdir, { recursive: true, force: true }); }
+
+  const prov = readFileSync(join(STG, "scripts", "provision.sh"), "utf8");
+  const startLines = prov.split("\n").filter((l) => /\bstart --workdir\b/.test(l));
+  check("PROVISION supabase start sempre redirecionado a arquivo privado", startLines.length > 0 && startLines.every((l) => /> "\$START_LOG" 2>&1/.test(l)), `${startLines.length} invocação(ões)`);
+  const iMask = prov.indexOf("::add-mask::");
+  const iPrint = prov.indexOf('redact-log.mjs" --secrets-env "$STACK_ENV" "$START_LOG"');
+  check("PROVISION saída do start só impressa redigida e após as máscaras", iMask > 0 && iPrint > iMask, "");
+  check("PROVISION máscara cobre todo valor *KEY*/*SECRET* do stack", /\(KEY\|SECRET\|PASSWORD\|TOKEN\)/.test(prov.slice(iMask - 400, iMask)), "");
+  check("CLEANUP remove o log bruto do start", readFileSync(join(STG, "scripts", "cleanup.sh"), "utf8").includes(".supabase-start.log"), "");
+  let wfSteps = [];
+  try { wfSteps = createRequire(join(REPO, "package.json"))("yaml").parse(readFileSync(join(STG, "workflow", "kora-staging-homologation.yml"), "utf8")).jobs.homologation.steps; } catch {}
+  const iRedact = wfSteps.findIndex((s) => s.id === "redact");
+  const iUpload = wfSteps.findIndex((s) => String(s.uses).startsWith("actions/upload-artifact"));
+  check("WF relatórios redigidos antes do upload; upload condicionado ao redator", iRedact >= 0 && iRedact < iUpload && /steps\.redact\.outputs\.rc/.test(String(wfSteps[iUpload].if)), "");
+  check("WF gate inclui o redator (credencial em relatório => BLOCKED)", /R_REDACT/.test(JSON.stringify(wfSteps.find((s) => /^Gate/.test(s.name ?? "")) ?? {})), "");
+}
+
+// 9. PROVISIONING-03-FIX — trava do seed e estado de baseline (tenant kora-demo da 001).
+{
+  const seedTxt = readFileSync(join(STG, "fixtures", "academic_seed.sql"), "utf8");
+  const guardTxt = readFileSync(join(STG, "fixtures", "seed_guard.sql"), "utf8");
+  const regrTxt = readFileSync(join(STG, "fixtures", "seed_guard_regression.sql"), "utf8");
+  const prov = readFileSync(join(STG, "scripts", "provision.sh"), "utf8");
+  const firstInsert = seedTxt.search(/insert into public\./i);
+  const iGuard = seedTxt.indexOf("perform pg_temp.kora_stg_assert_seed_target()");
+  check("SEED trava executada antes de qualquer insert", seedTxt.includes("\\ir seed_guard.sql") && iGuard > 0 && iGuard < firstInsert, "");
+  check("SEED mantém exigência de >=10 usuários auth sintéticos", /< 10 then/.test(seedTxt), "");
+  check("GUARD-SQL tolera somente slug kora-demo além de kora-stg-%", (guardTxt.match(/'kora-demo'/g) || []).length >= 2 && /slug not like 'kora-stg-%' and slug <> 'kora-demo'/.test(guardTxt) && !/slug in \(/i.test(guardTxt), "");
+  check("GUARD-SQL exige kora-demo presente, único e com nome/plano do baseline", /v_demo_count <> 1/.test(guardTxt) && /nome = 'KORA Demo' and plano = 'starter'/.test(guardTxt), "");
+  check("GUARD-SQL varre toda FK para tenants e toda coluna tenant_id", /confrelid = 'public\.tenants'::regclass/.test(guardTxt) && /a\.attname = 'tenant_id'/.test(guardTxt), "");
+  check("GUARD-SQL única exceção de vínculo = 1 'Unidade Bela Vista'", /v_n <> 1/.test(guardTxt) && (guardTxt.match(/Unidade Bela Vista/g) || []).length >= 2, "");
+  check("GUARD-SQL não altera dados", !/\b(insert|update|delete|truncate|drop|alter)\s/i.test(guardTxt.replace(/--.*$/gm, "").replace(/'[^']*'/g, "''")), "");
+  // O estado tolerado precisa continuar sendo exatamente o que as migrations criam.
+  const m001 = readFileSync(join(migDir, "001_kora_learn_nucleo.sql"), "utf8");
+  const m004 = readFileSync(join(migDir, "004_kora_learn_fase5.sql"), "utf8");
+  check("BASELINE 001 cria kora-demo ('KORA Demo','starter')", /values \('KORA Demo', 'kora-demo', 'starter'\)/.test(m001), "");
+  check("BASELINE 004 cria 'Unidade Bela Vista' no kora-demo", /'Unidade Bela Vista'[\s\S]{0,200}t\.slug = 'kora-demo'/.test(m004), "");
+  const otherTopLevelTenantInserts = readdirSync(migDir).sort().filter((n) => /^\d{3}_/.test(n)).filter((n) => {
+    const s = readFileSync(join(migDir, n), "utf8");
+    return /^insert into (public\.)?(tenants|unidades)\b/im.test(s) && !["001_kora_learn_nucleo.sql", "004_kora_learn_fase5.sql"].includes(n);
+  });
+  check("BASELINE nenhuma outra migration insere tenants/unidades no nível superior", otherTopLevelTenantInserts.length === 0, otherTopLevelTenantInserts.join(","));
+  const cases = [...regrTxt.matchAll(/pg_temp\.kora_stg_case\('(G\d+) /g)].map((m) => m[1]);
+  check("REGRESSÃO 12 cenários G1..G12", cases.length === 12 && cases.every((c, i) => c === `G${i + 1}`), cases.join(","));
+  check("REGRESSÃO cobre esperado/desconhecido/vínculo/ausência/auth", ["baseline esperado", "tenant desconhecido", "kora-demo ausente", "vínculo por FK", "usuário auth não sintético", "unidade extra"].every((k) => regrTxt.includes(k)), "");
+  check("REGRESSÃO sempre desfeita (subtransação + ROLLBACK final)", /errcode = 'KS999'/.test(regrTxt) && /\nrollback;\s*$/.test(regrTxt) && !/\ncommit;/i.test(regrTxt), "");
+  check("REGRESSÃO erro de preparação/não relacionado = FAIL", /FAIL %s: erro na preparação/.test(regrTxt) && /FAIL %s: erro não relacionado/.test(regrTxt), "");
+  const iRegr = prov.indexOf("seed_guard_regression.sql");
+  const iSeedAuth = prov.indexOf('node "$SCRIPT_DIR/seed-auth.mjs"');
+  const iMig = prov.indexOf("apply-migrations.sh");
+  check("PROVISION roda a regressão após migrations e antes do seed", iMig > 0 && iRegr > iMig && iRegr < iSeedAuth, "");
+}
 
 // Resultado
 const summary = results.reduce((a, r) => ((a[r.status] = (a[r.status] || 0) + 1), a), {});
